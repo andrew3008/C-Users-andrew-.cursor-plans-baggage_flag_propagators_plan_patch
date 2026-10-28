@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" tests="19" skipped="0" failures="0" errors="0" timestamp="2026-10-28T17:08:31.371Z" hostname="DESKTOP-OEGBG7F" time="0.01">
+  <properties/>
+  <testcase name="neverProjectsReservedPlatformAttributesFromBaggage(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.001"/>
+  <testcase name="platformRemoteServiceFallsBackToRpcService(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="doesNotOverwriteExistingPlatformType(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.001"/>
+  <testcase name="setsPlatformResultFailureOnStatusCodeError(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="overridesPlatformTypeToDatabaseWhenLegacyDbSystemPresent(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.001"/>
+  <testcase name="doesNotSetPlatformHostOnSpan(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="overridesPlatformTypeToDatabaseWhenStableDbSystemNamePresent(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.001"/>
+  <testcase name="doesNotSetPlatformRemoteServiceForSuccessfulClientCall(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="doesNotOverridePlatformTypeWhenSetExplicitlyByApplication(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.001"/>
+  <testcase name="platformRemoteServiceUsesShortDnsName(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="platformRemoteServiceIgnoresPureIpv6Address(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="platformRemoteServiceUsesServerAddressWithHostnameAndPort(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="setsPlatformRemoteServiceFromPeerServiceOnClientError(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="platformRemoteServiceIgnoresIpServerAddress(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="platformRemoteServiceUsesServerAddressAsDnsName(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="overridesPlatformTypeToDatabaseWhenBothDbSystemAttributesPresent(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.001"/>
+  <testcase name="doesNotOverridePlatformTypeForServerSpanWithDbAttributes(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <testcase name="doesNotSetPlatformRemoteServiceForServerSpanWithError(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.001"/>
+  <testcase name="setsPlatformTypeFromSpanKind(OpenTelemetrySdk, InMemorySpanExporter)" classname="space.br1440.platform.tracing.otel.javaagent.processor.EnrichingSpanProcessorTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

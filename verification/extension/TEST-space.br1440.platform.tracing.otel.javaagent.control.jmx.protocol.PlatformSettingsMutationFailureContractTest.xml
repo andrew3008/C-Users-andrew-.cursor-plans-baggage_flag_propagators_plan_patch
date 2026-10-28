@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="space.br1440.platform.tracing.otel.javaagent.control.jmx.protocol.PlatformSettingsMutationFailureContractTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-28T17:08:21.483Z" hostname="DESKTOP-OEGBG7F" time="0.143">
+  <properties/>
+  <testcase name="applyFailureDoesNotExposeForeignThrowable()" classname="space.br1440.platform.tracing.otel.javaagent.control.jmx.protocol.PlatformSettingsMutationFailureContractTest" time="0.063"/>
+  <testcase name="responseEncodingFailurePreservesAppliedStateAndNeutralizesThrowable()" classname="space.br1440.platform.tracing.otel.javaagent.control.jmx.protocol.PlatformSettingsMutationFailureContractTest" time="0.006"/>
+  <testcase name="policyRejectionDoesNotEmitGenericMutationFailureEvent()" classname="space.br1440.platform.tracing.otel.javaagent.control.jmx.protocol.PlatformSettingsMutationFailureContractTest" time="0.065"/>
+  <testcase name="unexpectedDecodeFailureIsRecordedWithoutLoggingUntrustedAttemptId()" classname="space.br1440.platform.tracing.otel.javaagent.control.jmx.protocol.PlatformSettingsMutationFailureContractTest" time="0.003"/>
+  <testcase name="preApplyResponseEncodingFailureUsesNeutralFixedCode()" classname="space.br1440.platform.tracing.otel.javaagent.control.jmx.protocol.PlatformSettingsMutationFailureContractTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

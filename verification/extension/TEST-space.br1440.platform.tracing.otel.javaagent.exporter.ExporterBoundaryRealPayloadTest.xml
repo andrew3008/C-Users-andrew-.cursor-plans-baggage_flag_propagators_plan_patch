@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="space.br1440.platform.tracing.otel.javaagent.exporter.ExporterBoundaryRealPayloadTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-28T17:08:22.287Z" hostname="DESKTOP-OEGBG7F" time="0.197">
+  <properties/>
+  <testcase name="Реальный OTLP payload не содержит сырых значений" classname="space.br1440.platform.tracing.otel.javaagent.exporter.ExporterBoundaryRealPayloadTest" time="0.033"/>
+  <testcase name="Span.recordException -&gt; boundary -&gt; реальный OTLP JSON: сырых значений нет в сериализованном виде" classname="space.br1440.platform.tracing.otel.javaagent.exporter.ExporterBoundaryRealPayloadTest" time="0.007"/>
+  <testcase name="Настоящий Span.recordException канонизируется без Throwable и без исходного сообщения" classname="space.br1440.platform.tracing.otel.javaagent.exporter.ExporterBoundaryRealPayloadTest" time="0.002"/>
+  <testcase name="Отрендеренный вывод LoggingSpanExporter (сообщение + параметры) не содержит секретов" classname="space.br1440.platform.tracing.otel.javaagent.exporter.ExporterBoundaryRealPayloadTest" time="0.002"/>
+  <testcase name="Span.recordException -&gt; boundary -&gt; реальный бинарный OTLP: канарейки нет в байтах запроса" classname="space.br1440.platform.tracing.otel.javaagent.exporter.ExporterBoundaryRealPayloadTest" time="0.153"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[Oct 28, 2026 5:08:22 PM io.opentelemetry.exporter.logging.otlp.internal.writer.LoggerJsonWriter write
+INFO: {"resource":{"attributes":[]},"scopeSpans":[{"scope":{"attributes":[]},"spans":[{"traceId":"00000000000000000000000000000000","spanId":"0000000000000000","name":"<redacted>","kind":1,"endTimeUnixNano":"1","attributes":[],"events":[{"timeUnixNano":"1","name":"<redacted>","attributes":[],"droppedAttributesCount":1}],"droppedEventsCount":-1,"links":[{"traceId":"00000000000000000000000000000abc","spanId":"000000000000abc1","attributes":[{"key":"contact","value":{"stringValue":"***"}}],"flags":256}],"droppedLinksCount":-1,"status":{"message":"<redacted>","code":2},"flags":256}]}]}
+Oct 28, 2026 5:08:22 PM io.opentelemetry.exporter.logging.otlp.internal.writer.LoggerJsonWriter write
+INFO: {"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"unknown_service:java"}},{"key":"telemetry.sdk.language","value":{"stringValue":"java"}},{"key":"telemetry.sdk.name","value":{"stringValue":"opentelemetry"}},{"key":"telemetry.sdk.version","value":{"stringValue":"1.66.0"}}]},"scopeSpans":[{"scope":{"name":"test","attributes":[]},"spans":[{"traceId":"e41cc746b461f9f008b7770fd69e2009","spanId":"f2964a8b98cbc5b5","name":"checkout","kind":1,"startTimeUnixNano":"1793207302322480500","endTimeUnixNano":"1793207302324545200","attributes":[],"events":[{"timeUnixNano":"1793207302323856000","name":"exception","attributes":[{"key":"exception.message","value":{"stringValue":"***"}},{"key":"exception.stacktrace","value":{"stringValue":"***"}},{"key":"exception.type","value":{"stringValue":"java.lang.IllegalStateException"}}]}],"links":[],"status":{},"flags":259}]}]}
+Oct 28, 2026 5:08:22 PM io.opentelemetry.exporter.logging.otlp.internal.traces.OtlpStdoutSpanExporter shutdown
+INFO: Calling shutdown() multiple times.
+Oct 28, 2026 5:08:22 PM io.opentelemetry.exporter.logging.LoggingSpanExporter export
+INFO: '<redacted>' : 00000000000000000000000000000000 0000000000000000 INTERNAL [tracer: :] {}
+Oct 28, 2026 5:08:22 PM io.opentelemetry.sdk.common.internal.ThrottlingLogger doLog
+INFO: Calling shutdown() multiple times.
+]]></system-err>
+</testsuite>

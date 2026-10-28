@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="space.br1440.platform.tracing.otel.javaagent.jmx.observation.ObservationSnapshotGetterGateTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-28T17:08:28.013Z" hostname="DESKTOP-OEGBG7F" time="0.003">
+  <properties/>
+  <testcase name="observationGettersUsePrecomputedGeneratedContractSnapshots()" classname="space.br1440.platform.tracing.otel.javaagent.jmx.observation.ObservationSnapshotGetterGateTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

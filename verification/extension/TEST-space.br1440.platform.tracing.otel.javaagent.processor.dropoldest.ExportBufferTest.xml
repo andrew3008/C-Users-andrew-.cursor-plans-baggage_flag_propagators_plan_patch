@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-10-28T17:08:32.766Z" hostname="DESKTOP-OEGBG7F" time="0.006">
+  <properties/>
+  <testcase name="markTerminatedFromActiveFailsPendingFlushAndDiscardsQueue()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.0"/>
+  <testcase name="exporterShutdownCannotRetroactivelyExpireCompletedDrain()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.001"/>
+  <testcase name="flushCallbackRunsWithoutTheBufferLock()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.001"/>
+  <testcase name="interruptedWaitFailsTheBufferAndRestoresTheInterruptFlag()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.001"/>
+  <testcase name="shutdownDeadlineSurvivesNanoTimeOverflow()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.0"/>
+  <testcase name="callbackFailureCannotStrandAnotherTerminalFlushGeneration()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.001"/>
+  <testcase name="staleExportCompletionCannotFailAnotherFlushGeneration()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.0"/>
+  <testcase name="exportConfirmedAtShutdownDeadlineFailsTheDrain()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.001"/>
+  <testcase name="completedDrainWinsWhenWorkerObservesItAfterDeadline()" classname="space.br1440.platform.tracing.otel.javaagent.processor.dropoldest.ExportBufferTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
