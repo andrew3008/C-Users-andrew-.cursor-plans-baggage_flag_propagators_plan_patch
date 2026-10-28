@@ -1,0 +1,2986 @@
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/build.gradle b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/build.gradle
+index 30bb5b28..83110090 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/build.gradle
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/build.gradle
+@@ -81,7 +81,7 @@ dependencies {
+     testImplementation 'io.opentelemetry:opentelemetry-sdk-extension-autoconfigure-spi'
+     testImplementation 'io.opentelemetry:opentelemetry-sdk-extension-autoconfigure'
+     testImplementation 'io.opentelemetry.javaagent:opentelemetry-javaagent-extension-api'
+-    testImplementation 'io.opentelemetry:opentelemetry-extension-trace-propagators'
++    testRuntimeOnly 'io.opentelemetry:opentelemetry-extension-trace-propagators'
+     testImplementation 'io.opentelemetry:opentelemetry-exporter-logging'
+     testImplementation 'io.opentelemetry:opentelemetry-exporter-logging-otlp'
+     testImplementation 'io.opentelemetry:opentelemetry-exporter-otlp'
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/session/AutoconfigureSessionFactory.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/session/AutoconfigureSessionFactory.java
+index 8216977e..1c41ae05 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/session/AutoconfigureSessionFactory.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/session/AutoconfigureSessionFactory.java
+@@ -7,6 +7,7 @@ import space.br1440.platform.tracing.otel.javaagent.bootstrap.resources.Bootstra
+ import space.br1440.platform.tracing.otel.javaagent.configuration.ConfigurationPropertyException;
+ import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionConfig;
+ import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames;
++import space.br1440.platform.tracing.otel.javaagent.configuration.PropagatorConfigurationContract;
+ import space.br1440.platform.tracing.otel.javaagent.configuration.SamplingExtensionConfig;
+ import space.br1440.platform.tracing.otel.javaagent.control.TracingSettingsSource;
+ import space.br1440.platform.tracing.otel.javaagent.identity.AgentInstanceId;
+@@ -47,6 +48,7 @@ public final class AutoconfigureSessionFactory {
+                                        AgentInstanceId agentInstanceId,
+                                        ExtensionRuntimeEvidence evidence) {
+         SamplerConfigurationContract.requireFinal(config);
++        PropagatorConfigurationContract.requireSupported(config);
+ 
+         ExtensionConfig extensionConfig = new ExtensionConfig(config);
+         if (!extensionConfig.scrubbing().enabled()) {
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageExtensionConfig.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageExtensionConfig.java
+index b95f3fa0..3b7b445f 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageExtensionConfig.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageExtensionConfig.java
+@@ -12,7 +12,14 @@ import static space.br1440.platform.tracing.otel.javaagent.configuration.Extensi
+ import static space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames.BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS;
+ 
+ import java.util.List;
++import java.util.Locale;
++import java.util.Set;
++import java.util.regex.Pattern;
++import java.util.regex.PatternSyntaxException;
+ 
++import space.br1440.platform.tracing.api.propagation.PlatformBaggageKeys;
++
++import io.opentelemetry.sdk.autoconfigure.spi.ConfigurationException;
+ import lombok.Getter;
+ import lombok.experimental.Accessors;
+ 
+@@ -21,34 +28,54 @@ import lombok.experimental.Accessors;
+ public final class BaggageExtensionConfig {
+ 
+     private final boolean propagationEnabled;
+-    private final List<String> outboundHeaderAllowedKeys;
+-    private final List<String> outboundHeaderDenyPatterns;
+-    private final List<String> spanAttributesAllowedKeys;
+-    private final List<String> spanAttributesDenyPatterns;
++    private final BaggageKeyPolicy outboundHeaderPolicy;
++    private final BaggageKeyPolicy spanAttributesPolicy;
+ 
+     BaggageExtensionConfig(ExtensionConfigReader reader) {
+         this.propagationEnabled = reader.booleanValue(
+                 BAGGAGE_PROPAGATION_ENABLED, DEFAULT_BAGGAGE_PROPAGATION_ENABLED
+         );
+ 
+-        this.outboundHeaderAllowedKeys = reader.listValue(
++        List<String> outboundHeaderAllowedKeys = reader.listValue(
+                 BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS,
+                 DEFAULT_BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS
+         );
+ 
+-        this.outboundHeaderDenyPatterns = reader.listValue(
+-                BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS,
+-                DEFAULT_BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS
+-        );
++        if (outboundHeaderAllowedKeys.stream()
++                .map(key -> key.toLowerCase(Locale.ROOT))
++                .anyMatch(PlatformBaggageKeys.CORRELATION_ID::equals)) {
++            throw new ConfigurationPropertyException(
++                    BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS,
++                    new ConfigurationException(BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS
++                            + " must not contain reserved key " + PlatformBaggageKeys.CORRELATION_ID)
++            );
++        }
+ 
+-        this.spanAttributesAllowedKeys = reader.listValue(
+-                BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS,
+-                DEFAULT_BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS
++        this.outboundHeaderPolicy = new BaggageKeyPolicy(
++                Set.copyOf(outboundHeaderAllowedKeys),
++                compileDenyPatterns(reader, BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS,
++                        DEFAULT_BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS)
+         );
+ 
+-        this.spanAttributesDenyPatterns = reader.listValue(
+-                BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS,
+-                DEFAULT_BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS
++        this.spanAttributesPolicy = new BaggageKeyPolicy(
++                Set.copyOf(reader.listValue(BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS,
++                        DEFAULT_BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS)),
++
++                compileDenyPatterns(reader, BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS,
++                        DEFAULT_BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS)
+         );
+     }
++
++    private static List<Pattern> compileDenyPatterns(ExtensionConfigReader reader,
++                                                   String propertyName,
++                                                   List<String> defaultPatterns) {
++        try {
++            return reader.listValue(propertyName, defaultPatterns).stream()
++                    .map(pattern -> Pattern.compile(pattern, Pattern.CASE_INSENSITIVE))
++                    .toList();
++        } catch (PatternSyntaxException failure) {
++            throw new ConfigurationPropertyException(propertyName,
++                    new ConfigurationException(propertyName + " contains an invalid regular expression", failure));
++        }
++    }
+ }
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionDefaults.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionDefaults.java
+index 13afe122..848b599e 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionDefaults.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionDefaults.java
+@@ -42,7 +42,7 @@ public final class ExtensionDefaults {
+ 
+     public static final boolean DEFAULT_BAGGAGE_PROPAGATION_ENABLED = true;
+     public static final List<String> DEFAULT_BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS =
+-            List.of("traffic_source", "tenant_class", PlatformBaggageKeys.CORRELATION_ID);
++            List.of("traffic_source", "tenant_class");
+     public static final List<String> DEFAULT_BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS = List.of("password", "secret", "token");
+     public static final List<String> DEFAULT_BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS =
+             List.of("traffic_source", "tenant_class", PlatformBaggageKeys.CORRELATION_ID);
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/OtelSdkPropertyNames.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/OtelSdkPropertyNames.java
+index 00a5654a..dc3f7fb5 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/OtelSdkPropertyNames.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/OtelSdkPropertyNames.java
+@@ -5,6 +5,8 @@ import lombok.experimental.UtilityClass;
+ @UtilityClass
+ public final class OtelSdkPropertyNames {
+ 
++    public static final String PROPAGATORS = "otel.propagators";
++
+     public static final String BSP_MAX_QUEUE_SIZE = "otel.bsp.max.queue.size";
+     public static final String BSP_MAX_EXPORT_BATCH_SIZE = "otel.bsp.max.export.batch.size";
+     public static final String BSP_SCHEDULE_DELAY = "otel.bsp.schedule.delay";
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactory.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactory.java
+index 99294420..99a21932 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactory.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactory.java
+@@ -1,11 +1,11 @@
+ package space.br1440.platform.tracing.otel.javaagent.factory;
+ 
+ import java.util.ArrayList;
+-import java.util.HashSet;
+ import java.util.List;
+ import java.util.Objects;
+ import java.util.Optional;
+ 
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
+ import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionConfig;
+ import space.br1440.platform.tracing.otel.javaagent.control.TracingSettingsSource;
+ import space.br1440.platform.tracing.otel.javaagent.jmx.registration.PlatformTracingMBeanRegistrar;
+@@ -70,18 +70,12 @@ public final class PlatformSpanProcessorFactory {
+     }
+ 
+     private Optional<SpanProcessor> baggageProcessor(ExtensionConfig extConfig) {
+-        List<String> allowlist = extConfig.baggage().spanAttributesAllowedKeys();
+-        if (allowlist.isEmpty()) {
++        BaggageKeyPolicy policy = extConfig.baggage().spanAttributesPolicy();
++        if (policy.isEmpty()) {
+             return Optional.empty();
+         }
+ 
+-        List<String> denyPatterns = extConfig.baggage().spanAttributesDenyPatterns();
+-
+-        BaggageSpanProcessor processor = new BaggageSpanProcessor(
+-                new HashSet<>(allowlist),
+-                new ArrayList<>(denyPatterns)
+-        );
+-        return Optional.of(processor);
++        return Optional.of(new BaggageSpanProcessor(policy));
+     }
+ 
+     private Optional<SpanProcessor> scrubbingProcessor(ExtensionConfig extConfig) {
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessor.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessor.java
+index 4ac0401b..d49ae715 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessor.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessor.java
+@@ -1,17 +1,15 @@
+ package space.br1440.platform.tracing.otel.javaagent.processor;
+ 
+-import java.util.List;
+ import java.util.Locale;
+ import java.util.Map;
+-import java.util.Set;
++import java.util.Objects;
+ import java.util.concurrent.ConcurrentHashMap;
+-import java.util.regex.Pattern;
+-import java.util.stream.Collectors;
+ import jakarta.annotation.Nonnull;
+ 
+ import space.br1440.platform.common.util.StringUtils;
+ import space.br1440.platform.tracing.api.attributes.PlatformAttributes;
+ import space.br1440.platform.tracing.api.propagation.PlatformBaggageKeys;
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
+ import space.br1440.platform.tracing.otel.javaagent.jmx.contract.generated.JmxWireContract;
+ 
+ import io.opentelemetry.api.baggage.Baggage;
+@@ -40,20 +38,12 @@ public final class BaggageSpanProcessor implements SpanProcessor, ProcessorDiagn
+     private static final int CORRELATION_ID_MAX_LENGTH = 128;
+     private static final AttributeKey<String> CORRELATION_ATTRIBUTE_KEY = AttributeKey.stringKey(PlatformAttributes.PLATFORM_CORRELATION_ID);
+ 
+-    private final Set<String> allowlist;
+-    private final List<Pattern> denyPatterns;
++    private final BaggageKeyPolicy policy;
+ 
+     private final Map<String, AttributeKey<String>> attributeKeysByNormalizedKey;
+ 
+-    public BaggageSpanProcessor(Set<String> allowlistKeys, List<String> denyPatternStrings) {
+-        this.allowlist = allowlistKeys.stream()
+-                .map(key -> key.toLowerCase(Locale.ROOT))
+-                .collect(Collectors.toUnmodifiableSet());
+-
+-        this.denyPatterns = denyPatternStrings.stream()
+-                .map(pattern -> Pattern.compile(pattern, Pattern.CASE_INSENSITIVE))
+-                .toList();
+-
++    public BaggageSpanProcessor(BaggageKeyPolicy policy) {
++        this.policy = Objects.requireNonNull(policy, "policy");
+         this.attributeKeysByNormalizedKey = new ConcurrentHashMap<>();
+     }
+ 
+@@ -64,7 +54,7 @@ public final class BaggageSpanProcessor implements SpanProcessor, ProcessorDiagn
+ 
+     @Override
+     public void onStart(@Nonnull Context parentContext, @Nonnull ReadWriteSpan span) {
+-        if (allowlist.isEmpty()) {
++        if (policy.isEmpty()) {
+             return;
+         }
+ 
+@@ -75,18 +65,11 @@ public final class BaggageSpanProcessor implements SpanProcessor, ProcessorDiagn
+     }
+ 
+     private void copyIfAllowed(String key, BaggageEntry entry, AttributesBuilder attributes) {
+-        if (key == null || entry == null) {
++        if (entry == null || !policy.allows(key)) {
+             return;
+         }
+ 
+         String normalizedKey = key.toLowerCase(Locale.ROOT);
+-        if (!allowlist.contains(normalizedKey)) {
+-            return;
+-        }
+-
+-        if (matchesDeny(normalizedKey)) {
+-            return;
+-        }
+ 
+         String value = entry.getValue();
+         if (StringUtils.isNullOrBlank(value)) {
+@@ -100,12 +83,12 @@ public final class BaggageSpanProcessor implements SpanProcessor, ProcessorDiagn
+             return;
+         }
+ 
+-        attributes.put(attributeKeyFor(key, normalizedKey), value);
++        attributes.put(attributeKeyFor(normalizedKey), value);
+     }
+ 
+-    private AttributeKey<String> attributeKeyFor(String key, String normalizedKey) {
++    private AttributeKey<String> attributeKeyFor(String normalizedKey) {
+         return attributeKeysByNormalizedKey.computeIfAbsent(
+-                normalizedKey, ignored -> AttributeKey.stringKey(ATTRIBUTE_PREFIX + key)
++                normalizedKey, key -> AttributeKey.stringKey(ATTRIBUTE_PREFIX + key)
+         );
+     }
+ 
+@@ -129,16 +112,6 @@ public final class BaggageSpanProcessor implements SpanProcessor, ProcessorDiagn
+         return true;
+     }
+ 
+-    private boolean matchesDeny(String key) {
+-        for (Pattern pattern : denyPatterns) {
+-            if (pattern.matcher(key).find()) {
+-                return true;
+-            }
+-        }
+-
+-        return false;
+-    }
+-
+     @Override
+     public boolean isStartRequired() {
+         return true;
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizer.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizer.java
+index e0a7faac..4c083912 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizer.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizer.java
+@@ -1,13 +1,24 @@
+ package space.br1440.platform.tracing.otel.javaagent.propagation;
+ 
++import java.util.Objects;
++
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageExtensionConfig;
++import space.br1440.platform.tracing.otel.javaagent.diagnostics.TracingDiagnostics;
++
+ import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
+ import io.opentelemetry.context.propagation.TextMapPropagator;
+ 
+-import java.util.HashSet;
++public final class BaggagePropagationCustomizer {
+ 
+-import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageExtensionConfig;
++    private final TracingDiagnostics diagnostics;
+ 
+-public final class BaggagePropagationCustomizer {
++    public BaggagePropagationCustomizer() {
++        this(TracingDiagnostics.shared());
++    }
++
++    BaggagePropagationCustomizer(TracingDiagnostics diagnostics) {
++        this.diagnostics = Objects.requireNonNull(diagnostics, "diagnostics");
++    }
+ 
+     public TextMapPropagator apply(TextMapPropagator propagator, BaggageExtensionConfig baggage) {
+         if (!(propagator instanceof W3CBaggagePropagator)) {
+@@ -18,11 +29,9 @@ public final class BaggagePropagationCustomizer {
+             return TextMapPropagator.noop();
+         }
+ 
+-        FilteringBaggagePropagator filtered = new FilteringBaggagePropagator(
+-                propagator,
+-                new HashSet<>(baggage.outboundHeaderAllowedKeys()),
+-                baggage.outboundHeaderDenyPatterns()
++        return new PlatformBaggagePropagator(
++                new SafeTextMapPropagator(propagator, diagnostics),
++                baggage.outboundHeaderPolicy()
+         );
+-        return new FailClosedCorrelationBaggagePropagator(new SafeTextMapPropagator(filtered));
+     }
+ }
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/FailClosedCorrelationBaggagePropagator.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/FailClosedCorrelationBaggagePropagator.java
+deleted file mode 100644
+index bb4da36f..00000000
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/FailClosedCorrelationBaggagePropagator.java
++++ /dev/null
+@@ -1,51 +0,0 @@
+-package space.br1440.platform.tracing.otel.javaagent.propagation;
+-
+-import java.util.Collection;
+-import java.util.Objects;
+-import jakarta.annotation.Nonnull;
+-
+-import space.br1440.platform.tracing.api.propagation.PlatformBaggageKeys;
+-
+-import io.opentelemetry.api.baggage.Baggage;
+-import io.opentelemetry.context.Context;
+-import io.opentelemetry.context.propagation.TextMapGetter;
+-import io.opentelemetry.context.propagation.TextMapPropagator;
+-import io.opentelemetry.context.propagation.TextMapSetter;
+-
+-final class FailClosedCorrelationBaggagePropagator implements TextMapPropagator {
+-
+-    private final TextMapPropagator delegate;
+-
+-    FailClosedCorrelationBaggagePropagator(TextMapPropagator delegate) {
+-        this.delegate = Objects.requireNonNull(delegate, "delegate");
+-    }
+-
+-    @Override
+-    public Collection<String> fields() {
+-        return delegate.fields();
+-    }
+-
+-    @Override
+-    public <C> Context extract(@Nonnull Context context, C carrier, @Nonnull TextMapGetter<C> getter) {
+-        return withoutUnverifiedCorrelation(delegate.extract(context, carrier, getter));
+-    }
+-
+-    @Override
+-    public <C> void inject(@Nonnull Context context, C carrier, @Nonnull TextMapSetter<C> setter) {
+-        delegate.inject(withoutUnverifiedCorrelation(context), carrier, setter);
+-    }
+-
+-    private static Context withoutUnverifiedCorrelation(Context context) {
+-        Context required = Objects.requireNonNull(context, "context");
+-
+-        Baggage baggage = Baggage.fromContext(required);
+-        if (baggage.getEntryValue(PlatformBaggageKeys.CORRELATION_ID) == null) {
+-            return required;
+-        }
+-
+-        return baggage.toBuilder()
+-                .remove(PlatformBaggageKeys.CORRELATION_ID)
+-                .build()
+-                .storeInContext(required);
+-    }
+-}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagator.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagator.java
+deleted file mode 100644
+index 26345f2b..00000000
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagator.java
++++ /dev/null
+@@ -1,90 +0,0 @@
+-package space.br1440.platform.tracing.otel.javaagent.propagation;
+-
+-import java.util.Collection;
+-import java.util.List;
+-import java.util.Locale;
+-import java.util.Set;
+-import java.util.regex.Pattern;
+-import java.util.stream.Collectors;
+-import jakarta.annotation.Nonnull;
+-
+-import io.opentelemetry.api.baggage.Baggage;
+-import io.opentelemetry.api.baggage.BaggageBuilder;
+-import io.opentelemetry.context.Context;
+-import io.opentelemetry.context.propagation.TextMapGetter;
+-import io.opentelemetry.context.propagation.TextMapPropagator;
+-import io.opentelemetry.context.propagation.TextMapSetter;
+-
+-final class FilteringBaggagePropagator implements TextMapPropagator {
+-
+-    private final TextMapPropagator delegate;
+-    private final Set<String> allowlist;
+-    private final List<Pattern> denyPatterns;
+-
+-    FilteringBaggagePropagator(TextMapPropagator delegate, Set<String> allowlist, List<String> denyPatternStrings) {
+-        this.delegate = delegate;
+-
+-        this.allowlist = allowlist.stream()
+-                .map(k -> k.toLowerCase(Locale.ROOT))
+-                .collect(Collectors.toUnmodifiableSet());
+-
+-        this.denyPatterns = denyPatternStrings.stream()
+-                .map(p -> Pattern.compile(p, Pattern.CASE_INSENSITIVE))
+-                .toList();
+-    }
+-
+-    @Override
+-    public Collection<String> fields() {
+-        return delegate.fields();
+-    }
+-
+-    @Override
+-    public <C> Context extract(@Nonnull Context context, C carrier, @Nonnull TextMapGetter<C> getter) {
+-        return delegate.extract(context, carrier, getter);
+-    }
+-
+-    @Override
+-    public <C> void inject(@Nonnull Context context, C carrier, @Nonnull TextMapSetter<C> setter) {
+-        Baggage source = Baggage.fromContext(context);
+-        if (source.isEmpty()) {
+-            return;
+-        }
+-
+-        Baggage filtered = filterAllowed(source);
+-        if (filtered.isEmpty()) {
+-            return;
+-        }
+-
+-        delegate.inject(filtered.storeInContext(context), carrier, setter);
+-    }
+-
+-    private Baggage filterAllowed(Baggage source) {
+-        BaggageBuilder builder = Baggage.builder();
+-        source.forEach((key, entry) -> {
+-            if (isAllowed(key)) {
+-                builder.put(key, entry.getValue(), entry.getMetadata());
+-            }
+-        });
+-
+-        return builder.build();
+-    }
+-
+-    private boolean isAllowed(String key) {
+-        if (key == null) {
+-            return false;
+-        }
+-
+-        String normalized = key.toLowerCase(Locale.ROOT);
+-        if (!allowlist.contains(normalized)) {
+-            return false;
+-        }
+-
+-        for (Pattern deny : denyPatterns) {
+-            if (deny.matcher(normalized).find()) {
+-                return false;
+-            }
+-        }
+-
+-        return true;
+-    }
+-}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformPropagatorsDefaultsCustomizer.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformPropagatorsDefaultsCustomizer.java
+index 59ccea86..52a665b4 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformPropagatorsDefaultsCustomizer.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformPropagatorsDefaultsCustomizer.java
+@@ -5,32 +5,32 @@ import java.util.List;
+ import java.util.Map;
+ import java.util.function.Function;
+ 
++import space.br1440.platform.tracing.otel.javaagent.configuration.OtelSdkPropertyNames;
++import space.br1440.platform.tracing.otel.javaagent.configuration.PropagatorConfigurationContract;
++
+ import io.opentelemetry.sdk.autoconfigure.spi.ConfigProperties;
+ 
+ public final class PlatformPropagatorsDefaultsCustomizer implements Function<ConfigProperties, Map<String, String>> {
+ 
+-    static final String PROPAGATORS_KEY = "otel.propagators";
+-    static final String PLATFORM_PROPAGATOR = TraceControlPropagatorProvider.NAME;
+-    static final String NONE = "none";
+     static final List<String> OTEL_DEFAULT_PROPAGATORS = List.of("tracecontext", "baggage");
+ 
+     @Override
+     public Map<String, String> apply(ConfigProperties config) {
+-        List<String> propagators = config.getList(PROPAGATORS_KEY);
++        List<String> propagators = config.getList(OtelSdkPropertyNames.PROPAGATORS);
+         if (propagators.isEmpty()) {
+             propagators = OTEL_DEFAULT_PROPAGATORS;
+         }
+ 
+-        if (propagators.contains(NONE)) {
++        if (propagators.contains(PropagatorConfigurationContract.NONE)) {
+             return Map.of();
+         }
+ 
+-        if (propagators.contains(PLATFORM_PROPAGATOR)) {
++        if (propagators.contains(PropagatorConfigurationContract.PLATFORM_PROPAGATOR)) {
+             return Map.of();
+         }
+ 
+         List<String> updated = new ArrayList<>(propagators);
+-        updated.add(PLATFORM_PROPAGATOR);
+-        return Map.of(PROPAGATORS_KEY, String.join(",", updated));
++        updated.add(PropagatorConfigurationContract.PLATFORM_PROPAGATOR);
++        return Map.of(OtelSdkPropertyNames.PROPAGATORS, String.join(",", updated));
+     }
+ }
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/TraceControlPropagatorProvider.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/TraceControlPropagatorProvider.java
+index 0b131f46..47d24fc3 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/TraceControlPropagatorProvider.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/TraceControlPropagatorProvider.java
+@@ -3,13 +3,15 @@ package space.br1440.platform.tracing.otel.javaagent.propagation;
+ import java.util.Objects;
+ import jakarta.annotation.Nonnull;
+ 
++import space.br1440.platform.tracing.otel.javaagent.configuration.PropagatorConfigurationContract;
++
+ import io.opentelemetry.context.propagation.TextMapPropagator;
+ import io.opentelemetry.sdk.autoconfigure.spi.ConfigProperties;
+ import io.opentelemetry.sdk.autoconfigure.spi.ConfigurablePropagatorProvider;
+ 
+ public final class TraceControlPropagatorProvider implements ConfigurablePropagatorProvider {
+ 
+-    static final String NAME = "platform-trace-control";
++    static final String NAME = PropagatorConfigurationContract.PLATFORM_PROPAGATOR;
+ 
+     @Override
+     public TextMapPropagator getPropagator(@Nonnull ConfigProperties config) {
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/arch/PropagationAndMdcBoundaryArchTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/arch/PropagationAndMdcBoundaryArchTest.java
+index 9c7f8aa8..2be674b6 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/arch/PropagationAndMdcBoundaryArchTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/arch/PropagationAndMdcBoundaryArchTest.java
+@@ -67,9 +67,8 @@ class PropagationAndMdcBoundaryArchTest {
+     void propagationDecoratorsAreNotPublic() {
+         // given
+         ArchRule rule = classes()
+-                .that().haveSimpleName("FilteringBaggagePropagator")
++                .that().haveSimpleName("PlatformBaggagePropagator")
+                 .or().haveSimpleName("SafeTextMapPropagator")
+-                .or().haveSimpleName("FailClosedCorrelationBaggagePropagator")
+                 .or().haveSimpleName("TraceControlPropagator")
+                 .should().notBePublic()
+                 .because("propagation decorators are internal implementation types");
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/BootstrapCoordinatorTestSupport.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/BootstrapCoordinatorTestSupport.java
+index a33799e2..b03709dc 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/BootstrapCoordinatorTestSupport.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/BootstrapCoordinatorTestSupport.java
+@@ -340,7 +340,7 @@ final class BootstrapCoordinatorTestSupport {
+             String value = data.get(name);
+ 
+             if (value == null) {
+-                return null;
++                return List.of();
+             }
+ 
+             if (value.isBlank()) {
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/PlatformPropagationAutoconfigureIntegrationTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/PlatformPropagationAutoconfigureIntegrationTest.java
+index 32f4cf88..f948f0ac 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/PlatformPropagationAutoconfigureIntegrationTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/bootstrap/PlatformPropagationAutoconfigureIntegrationTest.java
+@@ -1,16 +1,33 @@
+ package space.br1440.platform.tracing.otel.javaagent.bootstrap;
+ 
+ import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.catchThrowableOfType;
+ 
++import java.util.HashMap;
++import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
++import java.util.stream.Stream;
+ 
+ import org.junit.jupiter.api.DisplayName;
+ import org.junit.jupiter.api.Test;
+ import org.junit.jupiter.api.extension.ExtendWith;
++import org.junit.jupiter.api.parallel.ResourceLock;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.Arguments;
++import org.junit.jupiter.params.provider.MethodSource;
+ 
+ import space.br1440.platform.tracing.otel.javaagent.AutoConfiguredSdkIsolationExtension;
++import space.br1440.platform.tracing.otel.javaagent.configuration.OtelSdkPropertyNames;
++import space.br1440.platform.tracing.otel.javaagent.configuration.PropagatorConfigurationContract;
++import space.br1440.platform.tracing.otel.javaagent.logging.AgentLogCapture;
+ 
++import io.opentelemetry.api.baggage.Baggage;
++import io.opentelemetry.api.trace.Span;
++import io.opentelemetry.api.trace.SpanContext;
++import io.opentelemetry.api.trace.TraceFlags;
++import io.opentelemetry.api.trace.TraceState;
++import io.opentelemetry.context.Context;
+ import io.opentelemetry.context.propagation.TextMapPropagator;
+ import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
+ import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdkBuilder;
+@@ -19,7 +36,14 @@ import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdkBuilder;
+ @ExtendWith(AutoConfiguredSdkIsolationExtension.class)
+ class PlatformPropagationAutoconfigureIntegrationTest {
+ 
++    private static final List<String> TESTED_ADDITIONAL_PROPAGATORS =
++            List.of("b3", "b3multi", "platform-trace-control");
++
+     private static AutoConfiguredOpenTelemetrySdkBuilder baseBuilder() {
++        return baseBuilder(RuntimeEvidenceTestFixtures.coordinator());
++    }
++
++    private static AutoConfiguredOpenTelemetrySdkBuilder baseBuilder(BootstrapCoordinator coordinator) {
+         AutoConfiguredOpenTelemetrySdkBuilder builder = AutoConfiguredOpenTelemetrySdk.builder()
+                 .setServiceClassLoader(AutoConfigurationCustomizerTestClassLoader.withoutDiscoveredCustomizers())
+                 .disableShutdownHook()
+@@ -28,7 +52,7 @@ class PlatformPropagationAutoconfigureIntegrationTest {
+                         "otel.logs.exporter", "none",
+                         "otel.traces.exporter", "none")
+                 );
+-        new BootstrapAutoConfigurationCustomizerProvider(RuntimeEvidenceTestFixtures.coordinator()).customize(builder);
++        new BootstrapAutoConfigurationCustomizerProvider(coordinator).customize(builder);
+         return builder;
+     }
+ 
+@@ -170,45 +194,122 @@ class PlatformPropagationAutoconfigureIntegrationTest {
+         }
+     }
+ 
+-    @Test
+-    @DisplayName("baggage propagation disabled → исходящий baggage отсутствует, traceparent сохраняется")
+-    void baggagePropagationDisabled_omitsBaggageHeader_keepsTraceParent() {
++    @ParameterizedTest(name = "otel.propagators={0}, baggage enabled={1}")
++    @MethodSource("supportedPropagationConfigurations")
++    @DisplayName("Каждый разрешённый пропагатор соблюдает флаг и политику исходящего baggage")
++    void supportedPropagators_obeyBaggagePolicy(String propagators, boolean enabled) {
+         // given
+         AutoConfiguredOpenTelemetrySdk sdk = baseBuilder()
+                 .addPropertiesSupplier(() -> Map.of(
+-                        "otel.propagators", "tracecontext,baggage,platform-trace-control",
+-                        "platform.tracing.baggage.propagation.enabled", "false"))
++                        OtelSdkPropertyNames.PROPAGATORS, propagators,
++                        "platform.tracing.baggage.propagation.enabled", Boolean.toString(enabled),
++                        "platform.tracing.baggage.outbound-header.allowed-keys", "traffic_source,access_token"))
+                 .build();
+         try {
+             TextMapPropagator root = sdk.getOpenTelemetrySdk().getPropagators().getTextMapPropagator();
+-            io.opentelemetry.api.trace.SpanContext spanContext = io.opentelemetry.api.trace.SpanContext.create(
++            SpanContext spanContext = SpanContext.create(
+                     "0123456789abcdef0123456789abcdef",
+                     "0123456789abcdef",
+-                    io.opentelemetry.api.trace.TraceFlags.getSampled(),
+-                    io.opentelemetry.api.trace.TraceState.getDefault());
+-            io.opentelemetry.context.Context ctx = io.opentelemetry.context.Context.root()
+-                    .with(io.opentelemetry.api.trace.Span.wrap(spanContext))
+-                    .with(io.opentelemetry.api.baggage.Baggage.builder()
++                    TraceFlags.getSampled(),
++                    TraceState.getDefault());
++            Context ctx = Context.root()
++                    .with(Span.wrap(spanContext))
++                    .with(Baggage.builder()
+                             .put("traffic_source", "qa")
+-                            .put("password", "secret123")
++                            .put("access_token", "secret-token")
++                            .put("platform.correlation.id", "reserved-id")
++                            .put("password_x", "secret-password")
++                            .put("unlisted_key", "unlisted-value")
+                             .build());
+-            Map<String, String> carrier = new java.util.HashMap<>();
++            Map<String, String> carrier = new HashMap<>();
+ 
+             // when
+             root.inject(ctx, carrier, (c, k, v) -> Objects.requireNonNull(c, "carrier").put(k, v));
+ 
+             // then
+-            assertThat(root.fields())
+-                    .contains("traceparent", "X-Trace-On")
+-                    .doesNotContain("baggage");
+-            assertThat(carrier).doesNotContainKey("baggage");
+             assertThat(carrier.get("traceparent"))
+                     .isEqualTo("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
++            if (propagators.endsWith(",b3")) {
++                assertThat(carrier).containsEntry("b3", "0123456789abcdef0123456789abcdef-0123456789abcdef-1");
++            }
++            if (propagators.endsWith(",b3multi")) {
++                assertThat(carrier).containsEntry("X-B3-TraceId", "0123456789abcdef0123456789abcdef");
++            }
++            if (enabled) {
++                assertThat(carrier).containsEntry("baggage", "traffic_source=qa");
++            } else {
++                assertThat(root.fields()).doesNotContain("baggage");
++                assertThat(carrier).doesNotContainKey("baggage");
++            }
+         } finally {
+             sdk.getOpenTelemetrySdk().close();
+         }
+     }
+ 
++    private static Stream<Arguments> supportedPropagationConfigurations() {
++        return Stream.concat(Stream.of("tracecontext,baggage"),
++                        TESTED_ADDITIONAL_PROPAGATORS.stream().map(name -> "tracecontext,baggage," + name))
++                .flatMap(names -> Stream.of(Arguments.of(names, false), Arguments.of(names, true)));
++    }
++
++    @Test
++    void sdkInvariant_coversEverySupportedPropagator() {
++        // given
++        Stream<String> additionalPropagators = PropagatorConfigurationContract.SUPPORTED_PROPAGATORS.stream()
++                .filter(name -> !List.of(PropagatorConfigurationContract.NONE, "tracecontext", "baggage").contains(name));
++
++        // when
++        List<String> names = additionalPropagators.toList();
++
++        // then
++        assertThat(TESTED_ADDITIONAL_PROPAGATORS).containsExactlyInAnyOrderElementsOf(names);
++    }
++
++    @ParameterizedTest(name = "{0}={1}")
++    @MethodSource("invalidPropagationConfigurations")
++    @ResourceLock(AgentLogCapture.RESOURCE_LOCK)
++    void invalidPropagationConfiguration_failsDuringPreparation_withPropertyName(
++            String propertyName, String value, String diagnostic) {
++        // given
++        try (AgentLogCapture logs = AgentLogCapture.installed();
++             BootstrapCoordinator coordinator = RuntimeEvidenceTestFixtures.coordinator()) {
++            AutoConfiguredOpenTelemetrySdkBuilder builder = baseBuilder(coordinator)
++                    .addPropertiesSupplier(() -> Map.of(propertyName, value));
++
++            // when
++            BootstrapException failure = catchThrowableOfType(BootstrapException.class, builder::build);
++
++            // then
++            assertThat(failure).isNotNull().hasStackTraceContaining(diagnostic);
++            assertThat(failure.failure().effectiveCode()).isEqualTo("CONFIGURATION_INITIALIZATION_FAILED");
++            assertThat(coordinator.currentWire().lifecycle()).isEqualTo("FAILED");
++            assertThat(coordinator.currentWire().failureCode()).isEqualTo("CONFIGURATION_INITIALIZATION_FAILED");
++            assertThat(logs.events())
++                    .filteredOn(event -> "BOOTSTRAP_PHASE_FAILED".equals(event.eventName()))
++                    .singleElement()
++                    .satisfies(event -> assertThat(event.fields())
++                            .containsEntry("failureCode", "CONFIGURATION_INITIALIZATION_FAILED")
++                            .containsEntry("phase", "prepare")
++                            .containsEntry("subphase", "configuration-validation")
++                            .containsEntry("propertyName", propertyName));
++        }
++    }
++
++    private static Stream<Arguments> invalidPropagationConfigurations() {
++        return Stream.of(
++                Arguments.of(OtelSdkPropertyNames.PROPAGATORS, "jaeger", "unsupported propagators [jaeger]"),
++                Arguments.of(OtelSdkPropertyNames.PROPAGATORS, "ottrace", "unsupported propagators [ottrace]"),
++                Arguments.of(OtelSdkPropertyNames.PROPAGATORS, "tracecontext,jaeger", "unsupported propagators [jaeger]"),
++                Arguments.of(OtelSdkPropertyNames.PROPAGATORS, "JAEGER", "unsupported propagators [JAEGER]"),
++                Arguments.of("platform.tracing.baggage.outbound-header.deny-patterns", "[", "invalid regular expression"),
++                Arguments.of("platform.tracing.baggage.span-attributes.deny-patterns", "[", "invalid regular expression"),
++                Arguments.of("platform.tracing.baggage.outbound-header.allowed-keys", "platform.correlation.id",
++                        "must not contain reserved key platform.correlation.id"),
++                Arguments.of("platform.tracing.baggage.outbound-header.allowed-keys", "Platform.Correlation.Id",
++                        "must not contain reserved key platform.correlation.id")
++        );
++    }
++
+     @Test
+     @DisplayName("otel.propagators=none → платформенный пропагатор НЕ добавляется")
+     void propagators_none_excludes_platform() {
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionConfigTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionConfigTest.java
+index 685894ee..4ef90a50 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionConfigTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/ExtensionConfigTest.java
+@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
+ 
+ import java.nio.charset.StandardCharsets;
+ import java.time.Duration;
++import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
+@@ -299,18 +300,18 @@ class ExtensionConfigTest {
+         // given
+         ExtensionConfig config = new ExtensionConfig(emptyConfig());
+ 
++        // when
++        BaggageKeyPolicy outboundPolicy = config.baggage().outboundHeaderPolicy();
++        BaggageKeyPolicy spanPolicy = config.baggage().spanAttributesPolicy();
++
+         // then
+         assertThat(config.baggage().propagationEnabled()).isTrue();
+-
+-        assertThat(config.baggage().outboundHeaderAllowedKeys())
+-                .containsExactly("traffic_source", "tenant_class", "platform.correlation.id");
+-
+-        assertThat(config.baggage().outboundHeaderDenyPatterns()).containsExactly("password", "secret", "token");
+-
+-        assertThat(config.baggage().spanAttributesAllowedKeys())
+-                .containsExactly("traffic_source", "tenant_class", "platform.correlation.id");
+-
+-        assertThat(config.baggage().spanAttributesDenyPatterns()).containsExactly("password", "secret", "token");
++        assertThat(outboundPolicy.allows("traffic_source")).isTrue();
++        assertThat(outboundPolicy.allows("tenant_class")).isTrue();
++        assertThat(outboundPolicy.allows("platform.correlation.id")).isFalse();
++        assertThat(spanPolicy.allows("traffic_source")).isTrue();
++        assertThat(spanPolicy.allows("tenant_class")).isTrue();
++        assertThat(spanPolicy.allows("platform.correlation.id")).isTrue();
+     }
+ 
+     @Test
+@@ -484,9 +485,13 @@ class ExtensionConfigTest {
+                 ExtensionPropertyNames.BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS,
+                 List.of("x-tenant-id", "x-request-id")));
+ 
++        // when
++        BaggageKeyPolicy policy = config.baggage().outboundHeaderPolicy();
++
+         // then
+-        assertThat(config.baggage().outboundHeaderAllowedKeys())
+-                .containsExactly("x-tenant-id", "x-request-id");
++        assertThat(policy.allows("x-tenant-id")).isTrue();
++        assertThat(policy.allows("x-request-id")).isTrue();
++        assertThat(policy.allows("traffic_source")).isFalse();
+     }
+ 
+     @Test
+@@ -496,9 +501,13 @@ class ExtensionConfigTest {
+                 ExtensionPropertyNames.BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS,
+                 List.of("x-tenant-id", "x-request-id")));
+ 
++        // when
++        BaggageKeyPolicy policy = config.baggage().spanAttributesPolicy();
++
+         // then
+-        assertThat(config.baggage().spanAttributesAllowedKeys())
+-                .containsExactly("x-tenant-id", "x-request-id");
++        assertThat(policy.allows("x-tenant-id")).isTrue();
++        assertThat(policy.allows("x-request-id")).isTrue();
++        assertThat(policy.allows("traffic_source")).isFalse();
+     }
+ 
+     @Test
+@@ -555,19 +564,21 @@ class ExtensionConfigTest {
+         }
+ 
+         @Test
+-        void baggage_allowlistKeys_is_unmodifiable_when_provided() {
++        void baggage_policy_is_not_affected_by_source_allowlist_mutation() {
+             // given
++            List<String> allowedKeys = new ArrayList<>(List.of("x-tenant"));
+             ExtensionConfig cfg = new ExtensionConfig(listConfig(
+                     ExtensionPropertyNames.BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS,
+-                    List.of("x-tenant"))
++                    allowedKeys)
+             );
+ 
+             // when
+-            List<String> result = cfg.baggage().outboundHeaderAllowedKeys();
++            allowedKeys.clear();
++            allowedKeys.add("extra");
+ 
+             // then
+-            assertThatThrownBy(() -> result.add("extra"))
+-                    .isInstanceOf(UnsupportedOperationException.class);
++            assertThat(cfg.baggage().outboundHeaderPolicy().allows("x-tenant")).isTrue();
++            assertThat(cfg.baggage().outboundHeaderPolicy().allows("extra")).isFalse();
+         }
+     }
+ 
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactoryExtensionConfigAdoptionTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactoryExtensionConfigAdoptionTest.java
+index 320dd617..a8447c59 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactoryExtensionConfigAdoptionTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/factory/PlatformSpanProcessorFactoryExtensionConfigAdoptionTest.java
+@@ -710,7 +710,7 @@ class PlatformSpanProcessorFactoryExtensionConfigAdoptionTest {
+         }
+ 
+         @Test
+-        @DisplayName("Baggage defaults: canonical allowlist and deny patterns")
++        @DisplayName("Baggage defaults: canonical span attribute policy")
+         void default_baggage_matches_extension_defaults() {
+             // given
+             ExtensionConfig cfg = new ExtensionConfig(new ConfigProperties() {
+@@ -724,13 +724,14 @@ class PlatformSpanProcessorFactoryExtensionConfigAdoptionTest {
+                 @Override public Map<String, String> getMap(String n) { return null; }
+             });
+ 
++            // when
++            var policy = cfg.baggage().spanAttributesPolicy();
++
+             // then
+-            assertThat(cfg.baggage().spanAttributesAllowedKeys())
+-                    .as("baggage.span-attributes.allowed-keys default")
+-                    .containsExactly("traffic_source", "tenant_class", "platform.correlation.id");
+-            assertThat(cfg.baggage().spanAttributesDenyPatterns())
+-                    .as("baggage.span-attributes.deny-patterns default")
+-                    .containsExactly("password", "secret", "token");
++            assertThat(policy.allows("traffic_source")).isTrue();
++            assertThat(policy.allows("tenant_class")).isTrue();
++            assertThat(policy.allows("platform.correlation.id")).isTrue();
++            assertThat(policy.allows("unlisted")).isFalse();
+         }
+     }
+ 
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessorTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessorTest.java
+index a1bd510f..97502f7f 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessorTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/BaggageSpanProcessorTest.java
+@@ -4,11 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
+ 
+ import java.util.List;
+ import java.util.Set;
++import java.util.regex.Pattern;
+ 
+ import org.junit.jupiter.api.Test;
+ import org.junit.jupiter.api.extension.RegisterExtension;
+ 
+ import space.br1440.platform.tracing.api.attributes.PlatformAttributes;
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
+ import space.br1440.platform.tracing.test.junit.OtelSdkExtension;
+ import space.br1440.platform.tracing.test.junit.internal.ScopeMode;
+ 
+@@ -30,10 +32,12 @@ class BaggageSpanProcessorTest {
+     @RegisterExtension
+     static OtelSdkExtension otel = OtelSdkExtension.builder()
+             .scope(ScopeMode.METHOD)
+-            .addSpanProcessor(new BaggageSpanProcessor(
+-                    Set.of("tenant-id", "platform.correlation.id"),
+-                    List.of("secret", "password", "token")
+-            ))
++            .addSpanProcessor(new BaggageSpanProcessor(new BaggageKeyPolicy(
++                    Set.of("tenant-id", "tenant_class", "api-secret", "platform.correlation.id"),
++                    List.of("secret", "password", "token").stream()
++                            .map(pattern -> Pattern.compile(pattern, Pattern.CASE_INSENSITIVE))
++                            .toList()
++            )))
+             .build();
+ 
+     @Test
+@@ -96,4 +100,24 @@ class BaggageSpanProcessorTest {
+         // then
+         assertThat(exporter.getFinishedSpanItems().getFirst().getAttributes().asMap()).isEmpty();
+     }
++
++    @Test
++    void attribute_name_uses_normalized_key_regardless_of_first_seen_case(
++            OpenTelemetrySdk sdk, InMemorySpanExporter exporter) {
++        // given
++        Tracer tracer = sdk.getTracer("test");
++        Context mixedCase = Context.root().with(Baggage.builder().put("Tenant_Class", "gold").build());
++        Context lowerCase = Context.root().with(Baggage.builder().put("tenant_class", "silver").build());
++
++        // when
++        tracer.spanBuilder("mixed-case").setParent(mixedCase).startSpan().end();
++        tracer.spanBuilder("lower-case").setParent(lowerCase).startSpan().end();
++
++        // then
++        assertThat(exporter.getFinishedSpanItems()).hasSize(2);
++        assertThat(exporter.getFinishedSpanItems().getFirst().getAttributes().asMap())
++                .containsExactlyEntriesOf(Attributes.of(AttributeKey.stringKey("baggage.tenant_class"), "gold").asMap());
++        assertThat(exporter.getFinishedSpanItems().getLast().getAttributes().asMap())
++                .containsExactlyEntriesOf(Attributes.of(AttributeKey.stringKey("baggage.tenant_class"), "silver").asMap());
++    }
+ }
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDefaultLifecycleContractTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDefaultLifecycleContractTest.java
+index c9ad41b2..b3c07607 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDefaultLifecycleContractTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDefaultLifecycleContractTest.java
+@@ -10,6 +10,7 @@ import java.util.Set;
+ 
+ import org.junit.jupiter.api.Test;
+ 
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
+ import space.br1440.platform.tracing.otel.javaagent.control.TracingSettingsSourceTestFixtures;
+ import space.br1440.platform.tracing.otel.javaagent.control.settings.validation.SpanAttributeValidationLevel;
+ import space.br1440.platform.tracing.otel.javaagent.identity.AgentInstanceId;
+@@ -20,7 +21,7 @@ import io.opentelemetry.sdk.trace.SpanProcessor;
+ class ProcessorDefaultLifecycleContractTest {
+ 
+     private static final List<SpanProcessor> STATELESS_LIFECYCLE_PROCESSORS = List.of(
+-            new BaggageSpanProcessor(Set.of(), List.of()),
++            new BaggageSpanProcessor(new BaggageKeyPolicy(Set.of(), List.of())),
+             new EnrichingSpanProcessor(),
+             new RequestIdPropagatingSpanProcessor(),
+             ScrubbingSpanProcessorTestFixtures.fromBuiltInRules(List.of()),
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDiagnosticIdentityContractTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDiagnosticIdentityContractTest.java
+index 1ace1e29..6393c200 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDiagnosticIdentityContractTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/processor/ProcessorDiagnosticIdentityContractTest.java
+@@ -13,6 +13,7 @@ import com.tngtech.archunit.core.domain.JavaClass;
+ import com.tngtech.archunit.core.importer.ClassFileImporter;
+ import com.tngtech.archunit.core.importer.ImportOption;
+ 
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
+ import space.br1440.platform.tracing.otel.javaagent.control.TracingSettingsSourceTestFixtures;
+ import space.br1440.platform.tracing.otel.javaagent.control.settings.validation.SpanAttributeValidationLevel;
+ import space.br1440.platform.tracing.otel.javaagent.identity.AgentInstanceId;
+@@ -38,7 +39,7 @@ class ProcessorDiagnosticIdentityContractTest {
+ 
+         try {
+             List<ProcessorDiagnosticIdentity> processors = List.of(
+-                    new BaggageSpanProcessor(Set.of(), List.of()),
++                    new BaggageSpanProcessor(new BaggageKeyPolicy(Set.of(), List.of())),
+                     new EnrichingSpanProcessor(),
+                     new RequestIdPropagatingSpanProcessor(),
+                     ScrubbingSpanProcessorTestFixtures.fromBuiltInRules(List.of()),
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggageIngressPipelineTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggageIngressPipelineTest.java
+index 2e5160df..bacfc882 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggageIngressPipelineTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggageIngressPipelineTest.java
+@@ -2,7 +2,6 @@ package space.br1440.platform.tracing.otel.javaagent.propagation;
+ 
+ import static org.assertj.core.api.Assertions.assertThat;
+ 
+-import java.util.HashSet;
+ import java.util.Map;
+ 
+ import org.junit.jupiter.api.Test;
+@@ -10,7 +9,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
+ 
+ import space.br1440.platform.tracing.api.attributes.PlatformAttributes;
+ import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionConfig;
+-import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionDefaults;
+ import space.br1440.platform.tracing.otel.javaagent.processor.BaggageSpanProcessor;
+ import space.br1440.platform.tracing.test.junit.OtelSdkExtension;
+ import space.br1440.platform.tracing.test.junit.internal.ScopeMode;
+@@ -47,8 +45,9 @@ class BaggageIngressPipelineTest {
+     static OtelSdkExtension otel = OtelSdkExtension.builder()
+             .scope(ScopeMode.METHOD)
+             .addSpanProcessor(new BaggageSpanProcessor(
+-                    new HashSet<>(ExtensionDefaults.DEFAULT_BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS),
+-                    ExtensionDefaults.DEFAULT_BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS
++                    new ExtensionConfig(DefaultConfigProperties.createFromMap(Map.of()))
++                            .baggage()
++                            .spanAttributesPolicy()
+             ))
+             .build();
+ 
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizerTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizerTest.java
+index ae772fd8..ec091eda 100644
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizerTest.java
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/BaggagePropagationCustomizerTest.java
+@@ -3,6 +3,7 @@ package space.br1440.platform.tracing.otel.javaagent.propagation;
+ import static org.assertj.core.api.Assertions.assertThat;
+ 
+ import java.util.Collection;
++import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
+@@ -10,34 +11,43 @@ import java.util.Objects;
+ import org.junit.jupiter.api.DisplayName;
+ import org.junit.jupiter.api.Test;
+ 
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageExtensionConfig;
++import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionConfig;
++import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames;
++import space.br1440.platform.tracing.otel.javaagent.diagnostics.TracingDiagnostics;
++
++import io.opentelemetry.api.baggage.Baggage;
+ import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
+ import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
++import io.opentelemetry.context.Context;
+ import io.opentelemetry.context.propagation.TextMapGetter;
+ import io.opentelemetry.context.propagation.TextMapPropagator;
+ import io.opentelemetry.context.propagation.TextMapSetter;
+ import io.opentelemetry.sdk.autoconfigure.spi.ConfigProperties;
+ import io.opentelemetry.sdk.autoconfigure.spi.internal.DefaultConfigProperties;
+ 
+-import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageExtensionConfig;
+-import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionConfig;
+-import space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames;
+-
+ @DisplayName("BaggagePropagationCustomizer")
+ class BaggagePropagationCustomizerTest {
+ 
+-    private final BaggagePropagationCustomizer customizer = new BaggagePropagationCustomizer();
++    private final TracingDiagnostics diagnostics = new TracingDiagnostics();
++    private final BaggagePropagationCustomizer customizer = new BaggagePropagationCustomizer(diagnostics);
+ 
+     @Test
+-    @DisplayName("W3C baggage + baggage enabled → возвращает единственную F0-границу")
+-    void w3cBaggage_enabled_returnsWrapped() {
++    @DisplayName("W3C baggage + baggage enabled → разрешённый baggage передаётся в заголовке")
++    void w3cBaggage_enabled_injectsAllowedBaggage() {
+         // given
+-        TextMapPropagator propagator = W3CBaggagePropagator.getInstance();
++        TextMapPropagator propagator = customizer.apply(
++                W3CBaggagePropagator.getInstance(),
++                configWithBaggageEnabled(true)
++        );
++        Context context = Context.root().with(Baggage.builder().put("traffic_source", "qa").build());
++        Map<String, String> carrier = new HashMap<>();
+ 
+         // when
+-        TextMapPropagator result = customizer.apply(propagator, configWithBaggageEnabled(true));
++        propagator.inject(context, carrier, Map::put);
+ 
+         // then
+-        assertThat(result).isInstanceOf(FailClosedCorrelationBaggagePropagator.class);
++        assertThat(carrier).containsExactlyEntriesOf(Map.of("baggage", "traffic_source=qa"));
+     }
+ 
+     @Test
+@@ -135,8 +145,8 @@ class BaggagePropagationCustomizerTest {
+     }
+ 
+     @Test
+-    @DisplayName("характеризация: собранная цепочка фильтрует allowlist и убирает platform.correlation.id одновременно")
+-    void assembledChain_filtersAllowlistAndStripsCorrelation_characterization() {
++    @DisplayName("собранная цепочка фильтрует allowlist и убирает platform.correlation.id одновременно")
++    void assembledChain_filtersAllowlistAndStripsCorrelation() {
+         // given
+         TextMapPropagator chain = customizer.apply(W3CBaggagePropagator.getInstance(), configWithBaggageEnabled(true));
+         io.opentelemetry.context.Context ctx = io.opentelemetry.context.Context.root().with(
+@@ -151,11 +161,7 @@ class BaggagePropagationCustomizerTest {
+         chain.inject(ctx, carrier, (c, k, v) -> Objects.requireNonNull(c, "carrier").put(k, v));
+ 
+         // then
+-        String header = carrier.get("baggage");
+-        assertThat(header)
+-                .doesNotContain("password")
+-                .doesNotContain("platform.correlation.id")
+-                .contains("traffic_source");
++        assertThat(carrier).containsExactlyEntriesOf(Map.of("baggage", "traffic_source=qa"));
+     }
+ 
+     @Test
+@@ -183,6 +189,45 @@ class BaggagePropagationCustomizerTest {
+                 .doesNotContain("access_token");
+     }
+ 
++    @Test
++    @DisplayName("ошибка чтения carrier сохраняет допустимый baggage и удаляет reserved-ключ")
++    void assembledChain_stripsCorrelationAfterExtractionFailure() {
++        // given
++        TextMapPropagator chain = customizer.apply(
++                W3CBaggagePropagator.getInstance(),
++                configWithBaggageEnabled(true)
++        );
++
++        Context input = Context.root().with(Baggage.builder()
++                .put("platform.correlation.id", "unverified-workflow")
++                .put("traffic_source", "qa")
++                .build());
++
++        TextMapGetter<Map<String, String>> failingGetter = new TextMapGetter<>() {
++            @Override
++            public Iterable<String> keys(Map<String, String> carrier) {
++                return carrier.keySet();
++            }
++
++            @Override
++            public String get(Map<String, String> carrier, String key) {
++                throw new IllegalStateException("Carrier read failed");
++            }
++        };
++
++        // when
++        Context extracted = chain.extract(input, Map.of("baggage", "traffic_source=remote"), failingGetter);
++
++        // then
++        assertThat(diagnostics.getPropagatorFailures()).isEqualTo(1);
++        Baggage baggage = Baggage.fromContext(extracted);
++        assertThat(baggage.size()).isEqualTo(1);
++        assertThat(baggage.getEntryValue("traffic_source")).isEqualTo("qa");
++        assertThat(baggage.getEntryValue("platform.correlation.id")).isNull();
++        assertThat(Baggage.fromContext(input).getEntryValue("platform.correlation.id"))
++                .isEqualTo("unverified-workflow");
++    }
++
+     private static BaggageExtensionConfig configWithBaggageEnabled(boolean enabled) {
+         ConfigProperties props = DefaultConfigProperties.createFromMap(
+                 Map.of(ExtensionPropertyNames.BAGGAGE_PROPAGATION_ENABLED, String.valueOf(enabled))
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FailClosedCorrelationBaggagePropagatorTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FailClosedCorrelationBaggagePropagatorTest.java
+deleted file mode 100644
+index 12d67dc7..00000000
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FailClosedCorrelationBaggagePropagatorTest.java
++++ /dev/null
+@@ -1,144 +0,0 @@
+-package space.br1440.platform.tracing.otel.javaagent.propagation;
+-
+-import static org.assertj.core.api.Assertions.assertThat;
+-import static org.junit.jupiter.api.Assertions.assertThrows;
+-
+-import java.util.Collection;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.concurrent.ConcurrentHashMap;
+-
+-import org.junit.jupiter.api.Test;
+-
+-import space.br1440.platform.tracing.api.propagation.PlatformBaggageKeys;
+-
+-import io.opentelemetry.api.baggage.Baggage;
+-import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
+-import io.opentelemetry.context.Context;
+-import io.opentelemetry.context.propagation.TextMapGetter;
+-import io.opentelemetry.context.propagation.TextMapPropagator;
+-import io.opentelemetry.context.propagation.TextMapSetter;
+-
+-class FailClosedCorrelationBaggagePropagatorTest {
+-
+-    private static final TextMapGetter<Map<String, String>> GETTER = new TextMapGetter<>() {
+-        @Override
+-        public Iterable<String> keys(Map<String, String> carrier) {
+-            if (carrier == null) {
+-                return List.of();
+-            }
+-
+-            return carrier.keySet();
+-        }
+-
+-        @Override
+-        public String get(Map<String, String> carrier, String key) {
+-            if (carrier == null) {
+-                return null;
+-            }
+-
+-            return carrier.get(key);
+-        }
+-    };
+-
+-    private static final TextMapSetter<Map<String, String>> SETTER = (carrier, key, value) -> {
+-        if (carrier == null || key == null || value == null) {
+-            return;
+-        }
+-
+-        carrier.put(key, value);
+-    };
+-
+-    private final FailClosedCorrelationBaggagePropagator propagator =
+-            new FailClosedCorrelationBaggagePropagator(W3CBaggagePropagator.getInstance());
+-
+-    @Test
+-    void stripsCanonicalCorrelationOnExtractAndPreservesUnrelatedBaggage() {
+-        // when
+-        Context extracted = propagator.extract(
+-                Context.root(),
+-                Map.of("baggage", "platform.correlation.id=spoofed,tenant_class=internal"),
+-                GETTER
+-        );
+-
+-        // then
+-        Baggage baggage = Baggage.fromContext(extracted);
+-        assertThat(baggage.getEntryValue(PlatformBaggageKeys.CORRELATION_ID))
+-                .isNull();
+-        assertThat(baggage.getEntryValue("tenant_class")).isEqualTo("internal");
+-    }
+-
+-    @Test
+-    void stripsCanonicalCorrelationOnInjectAndPreservesUnrelatedBaggage() {
+-        // given
+-        Context context = Baggage.builder()
+-                .put(PlatformBaggageKeys.CORRELATION_ID, "workflow-42")
+-                .put("tenant_class", "internal")
+-                .build()
+-                .storeInContext(Context.root());
+-        Map<String, String> carrier = new ConcurrentHashMap<>();
+-
+-        // when
+-        propagator.inject(context, carrier, SETTER);
+-
+-        // then
+-        assertThat(carrier.get("baggage"))
+-                .contains("tenant_class=internal")
+-                .doesNotContain(PlatformBaggageKeys.CORRELATION_ID);
+-    }
+-
+-    @Test
+-    @SuppressWarnings({"ConstantConditions", "DataFlowIssue"})
+-    // given
+-    void injectWithNullContextPropagatesExceptionBeforeDelegateIsInvoked() {
+-        Map<String, String> carrier = new ConcurrentHashMap<>();
+-
+-        assertThrows(NullPointerException.class,
+-                () -> propagator.inject(null, carrier, SETTER));
+-
+-        assertThat(carrier).isEmpty();
+-    }
+-
+-    @Test
+-    // given
+-    void extractWithDelegateReturningNullPropagatesException() {
+-        FailClosedCorrelationBaggagePropagator propagatorOverNullDelegate =
+-                new FailClosedCorrelationBaggagePropagator(new TextMapPropagator() {
+-                    @Override
+-                    public Collection<String> fields() {
+-                        return List.of();
+-                    }
+-
+-                    @Override
+-                    public <C> void inject(Context context, C carrier, TextMapSetter<C> setter) {
+-                    }
+-
+-                    @Override
+-                    public <C> Context extract(Context context, C carrier, TextMapGetter<C> getter) {
+-                        return null;
+-                    }
+-                });
+-
+-        assertThrows(NullPointerException.class,
+-                () -> propagatorOverNullDelegate.extract(Context.root(), Map.of(), GETTER));
+-    }
+-
+-    @Test
+-    void removesCanonicalCorrelationAlreadyPresentInInputContext() {
+-        // given
+-        Context input = Baggage.builder()
+-                .put(PlatformBaggageKeys.CORRELATION_ID, "preexisting")
+-                .put("tenant_class", "internal")
+-                .build()
+-                .storeInContext(Context.root());
+-
+-        // when
+-        Context extracted = propagator.extract(input, Map.of(), GETTER);
+-
+-        // then
+-        Baggage baggage = Baggage.fromContext(extracted);
+-        assertThat(baggage.getEntryValue(PlatformBaggageKeys.CORRELATION_ID))
+-                .isNull();
+-        assertThat(baggage.getEntryValue("tenant_class")).isEqualTo("internal");
+-    }
+-}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagatorBaggageLimitsTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagatorBaggageLimitsTest.java
+deleted file mode 100644
+index 3783fcc0..00000000
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagatorBaggageLimitsTest.java
++++ /dev/null
+@@ -1,149 +0,0 @@
+-package space.br1440.platform.tracing.otel.javaagent.propagation;
+-
+-import static org.assertj.core.api.Assertions.assertThat;
+-
+-import java.util.HashMap;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-
+-import io.opentelemetry.api.baggage.Baggage;
+-import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
+-import io.opentelemetry.context.Context;
+-import io.opentelemetry.context.propagation.TextMapGetter;
+-
+-import org.junit.jupiter.api.DisplayName;
+-import org.junit.jupiter.api.Test;
+-
+-/**
+- * Regression на security fix OTel SDK 1.62.0 (GHSA-rcgg-9c38-7xpx, PR #8378):
+- * лимиты W3C baggage на входящем пути.
+- *
+- * <p><b>Контекст.</b> {@link FilteringBaggagePropagator} делегирует {@code extract()} штатному
+- * {@link W3CBaggagePropagator} (фильтрация allowlist'ом применяется только на {@code inject()}).
+- * Поэтому лимиты из fix #8378 — {@code MAX_BAGGAGE_ENTRIES = 64} и {@code MAX_BAGGAGE_BYTES = 8192} —
+- * наследуются автоматически через делегирование. Этот тест фиксирует факт наследования, чтобы
+- * будущий рефакторинг {@code extract()} не вырезал защиту от unbounded-парсинга недоверенного
+- * заголовка.</p>
+- */
+-class FilteringBaggagePropagatorBaggageLimitsTest {
+-
+-    /** Лимиты из спецификации W3C baggage, применяемые штатным propagator'ом (см. fix #8378). */
+-    private static final int MAX_BAGGAGE_ENTRIES = 64;
+-    private static final int MAX_BAGGAGE_BYTES = 8192;
+-
+-    private static final Set<String> ALLOWLIST = Set.of("traffic_source", "tenant_class");
+-    private static final List<String> DENY = List.of("password", "secret", "token");
+-
+-    /** Getter поверх Map: возвращает заголовок {@code baggage} как единственное значение. */
+-    private static final TextMapGetter<Map<String, String>> MAP_GETTER =
+-            new TextMapGetter<>() {
+-                @Override
+-                public Iterable<String> keys(Map<String, String> carrier) {
+-                    return carrier.keySet();
+-                }
+-
+-                @Override
+-                public String get(Map<String, String> carrier, String key) {
+-                    return carrier == null ? null : carrier.get(key);
+-                }
+-            };
+-
+-    private static FilteringBaggagePropagator newPropagator() {
+-        return new FilteringBaggagePropagator(
+-                W3CBaggagePropagator.getInstance(), ALLOWLIST, DENY);
+-    }
+-
+-    @Test
+-    @DisplayName("extract: входящий заголовок свыше 64 записей урезается до лимита W3C (наследуется от stock)")
+-    void extract_cappedAtMaxEntries() {
+-        // given
+-        int oversized = MAX_BAGGAGE_ENTRIES + 36; // 100 записей
+-        StringBuilder header = new StringBuilder();
+-        for (int i = 0; i < oversized; i++) {
+-            if (i > 0) {
+-                header.append(',');
+-            }
+-            header.append("k").append(i).append("=v").append(i);
+-        }
+-        Map<String, String> carrier = new HashMap<>();
+-        carrier.put("baggage", header.toString());
+-
+-        // when
+-        Context extracted = newPropagator().extract(Context.root(), carrier, MAP_GETTER);
+-
+-        // then
+-        Baggage baggage = Baggage.fromContext(extracted);
+-        assertThat(baggage.size())
+-                .as("extract должен наследовать лимит MAX_BAGGAGE_ENTRIES от stock W3CBaggagePropagator")
+-                .isEqualTo(MAX_BAGGAGE_ENTRIES);
+-    }
+-
+-    @Test
+-    @DisplayName("extract: входящий заголовок свыше 8192 байт целиком отбрасывается (защита от DoS)")
+-    void extract_oversizedHeaderDropped() {
+-        // given
+-        String hugeValue = "a".repeat(MAX_BAGGAGE_BYTES + 1000);
+-        Map<String, String> carrier = new HashMap<>();
+-        carrier.put("baggage", "k=" + hugeValue);
+-
+-        // when
+-        Context extracted = newPropagator().extract(Context.root(), carrier, MAP_GETTER);
+-
+-        // then
+-        assertThat(Baggage.fromContext(extracted).isEmpty())
+-                .as("заголовок свыше MAX_BAGGAGE_BYTES должен отбрасываться целиком")
+-                .isTrue();
+-    }
+-
+-    @Test
+-    @DisplayName("inject: allowlist-фильтрация исходящего baggage не регрессировала")
+-    void inject_allowlistFilteringStillWorks() {
+-        // given
+-        Context ctx = Context.root().with(Baggage.builder()
+-                .put("password", "secret123")
+-                .put("traffic_source", "qa")
+-                .build());
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
+-
+-        // then
+-        String baggage = carrier.get("baggage");
+-        assertThat(baggage)
+-                .doesNotContain("password")
+-                .doesNotContain("secret123")
+-                .contains("traffic_source=qa");
+-    }
+-
+-    @Test
+-    @DisplayName("extract: empty W3C baggage value is retained on OTel 1.64")
+-    void extractRetainsEmptyBaggageValue() {
+-        // given
+-        Map<String, String> carrier = Map.of("baggage", "empty=,traffic_source=qa");
+-
+-        // when
+-        Baggage baggage = Baggage.fromContext(
+-                newPropagator().extract(Context.root(), carrier, MAP_GETTER));
+-
+-        // then
+-        assertThat(baggage.getEntryValue("empty")).isEmpty();
+-        assertThat(baggage.getEntryValue("traffic_source")).isEqualTo("qa");
+-    }
+-
+-    @Test
+-    @DisplayName("extract: malformed percent encoding is discarded without damaging a valid neighbour")
+-    void extractDiscardsMalformedPercentEncodingAndKeepsValidNeighbour() {
+-        // given
+-        Map<String, String> carrier = Map.of("baggage", "broken=%ZZ,traffic_source=qa");
+-
+-        // when
+-        Baggage baggage = Baggage.fromContext(
+-                newPropagator().extract(Context.root(), carrier, MAP_GETTER));
+-
+-        // then
+-        assertThat(baggage.getEntryValue("broken")).isNull();
+-        assertThat(baggage.getEntryValue("traffic_source")).isEqualTo("qa");
+-    }
+-}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagatorInjectionTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagatorInjectionTest.java
+deleted file mode 100644
+index 426d960b..00000000
+--- a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/FilteringBaggagePropagatorInjectionTest.java
++++ /dev/null
+@@ -1,255 +0,0 @@
+-package space.br1440.platform.tracing.otel.javaagent.propagation;
+-
+-import static org.assertj.core.api.Assertions.assertThat;
+-
+-import java.nio.charset.StandardCharsets;
+-import java.util.HashMap;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-import java.util.concurrent.atomic.AtomicInteger;
+-
+-import org.junit.jupiter.api.DisplayName;
+-import org.junit.jupiter.api.Test;
+-
+-import io.opentelemetry.api.baggage.Baggage;
+-import io.opentelemetry.api.baggage.BaggageBuilder;
+-import io.opentelemetry.api.baggage.BaggageEntryMetadata;
+-import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
+-import io.opentelemetry.context.Context;
+-import io.opentelemetry.context.propagation.TextMapGetter;
+-import io.opentelemetry.context.propagation.TextMapSetter;
+-
+-/**
+- * Slice 1 (characterization, проходит на дорефакторинговом коде) и Slice 2 (RED/GREEN
+- * conformance для исправления W3C outbound baggage encoding) для {@link FilteringBaggagePropagator}.
+- *
+- * <p>Таксономия обязательна: методы с суффиксом {@code Characterization} фиксируют поведение,
+- * не зависящее от корректности wire-encoding, и обязаны проходить как до, так и после Slice 2.
+- * Методы с суффиксом {@code Conformance} проверяют исправленный W3C-корректный encoding и до
+- * Slice 2 production edit ожидаемо RED.
+- */
+-@DisplayName("FilteringBaggagePropagator: inject")
+-class FilteringBaggagePropagatorInjectionTest {
+-
+-    private static final Set<String> ALLOWLIST = Set.of("traffic_source", "tenant_class");
+-    private static final List<String> DENY = List.of("password", "secret", "token");
+-
+-    private static FilteringBaggagePropagator newPropagator() {
+-        return new FilteringBaggagePropagator(W3CBaggagePropagator.getInstance(), ALLOWLIST, DENY);
+-    }
+-
+-    @Test
+-    @DisplayName("characterization: полностью отфильтрованный baggage не вызывает setter.set ни разу")
+-    void fullyFilteredBaggage_neverCallsSetter_characterization() {
+-        // given
+-        Context ctx = Context.root().with(Baggage.builder()
+-                .put("password", "secret123")
+-                .put("token", "jwt-abc")
+-                .build());
+-        AtomicInteger setterCalls = new AtomicInteger();
+-        TextMapSetter<Map<String, String>> countingSetter = (carrier, key, value) -> {
+-            setterCalls.incrementAndGet();
+-            carrier.put(key, value);
+-        };
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, countingSetter);
+-
+-        // then
+-        assertThat(setterCalls.get()).isZero();
+-        assertThat(carrier).isEmpty();
+-    }
+-
+-    @Test
+-    @DisplayName("characterization: пустой (без entries) baggage не вызывает setter.set ни разу")
+-    void emptyBaggage_neverCallsSetter_characterization() {
+-        // given
+-        Context ctx = Context.root();
+-        AtomicInteger setterCalls = new AtomicInteger();
+-        TextMapSetter<Map<String, String>> countingSetter = (carrier, key, value) -> setterCalls.incrementAndGet();
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, countingSetter);
+-
+-        // then
+-        assertThat(setterCalls.get()).isZero();
+-        assertThat(carrier).isEmpty();
+-    }
+-
+-    // ------------------------------------------------------------------------------------------
+-    // S2 (плана рефакторинга configuration): фиксирует деловое решение по одностороннести
+-    // фильтрации — extract остаётся неотфильтрованным сквозным проходом намеренно, а не по
+-    // недосмотру. См. Javadoc класса. Ключи allowlist/deny называются "outbound", потому что
+-    // это поведение существует и задокументировано.
+-    // ------------------------------------------------------------------------------------------
+-
+-    @Test
+-    @DisplayName("extract не фильтрует входящий baggage вообще — намеренная асимметрия с inject")
+-    void extract_isUnfilteredPassthrough_byDesign() {
+-        // given
+-        Map<String, String> carrier = new HashMap<>();
+-        Context outboundCtx = Context.root().with(Baggage.builder()
+-                .put("password", "leak")
+-                .put("not_allowlisted", "x")
+-                .put("tenant_class", "gold")
+-                .build());
+-        // Собираем carrier напрямую через stock-делегат (минуя фильтр inject), чтобы carrier
+-        // отражал именно то, что реально приходит по проводу от недоверенного отправителя.
+-        W3CBaggagePropagator.getInstance().inject(outboundCtx, carrier, (c, k, v) -> c.put(k, v));
+-
+-        Context extracted = newPropagator().extract(Context.root(), carrier, MAP_GETTER);
+-
+-        Baggage baggage = Baggage.fromContext(extracted);
+-        assertThat(baggage.getEntryValue("password"))
+-                .as("extract не вычищает deny-ключи — фильтрация только на inject")
+-                .isEqualTo("leak");
+-        assertThat(baggage.getEntryValue("not_allowlisted"))
+-                .as("extract не проверяет allowlist — фильтрация только на inject")
+-                .isEqualTo("x");
+-        assertThat(baggage.getEntryValue("tenant_class")).isEqualTo("gold");
+-    }
+-
+-    // ------------------------------------------------------------------------------------------
+-    // Slice 2 (conformance, §6.1 плана): исправление P1 — ручная сериализация заменена
+-    // делегированием stock W3CBaggagePropagator. До production edit ожидается RED
+-    // (текущая реализация кодирует пробел как '+', а не '%20').
+-    // ------------------------------------------------------------------------------------------
+-
+-    private static final TextMapGetter<Map<String, String>> MAP_GETTER = new TextMapGetter<>() {
+-        @Override
+-        public Iterable<String> keys(Map<String, String> carrier) {
+-            return carrier.keySet();
+-        }
+-
+-        @Override
+-        public String get(Map<String, String> carrier, String key) {
+-            return carrier == null ? null : carrier.get(key);
+-        }
+-    };
+-
+-    @Test
+-    @DisplayName("conformance: ASCII space кодируется как %20 (не '+') и проходит stock round-trip")
+-    void spaceEncodedAsPercent20_stockRoundTrip_conformance() {
+-        // given
+-        Context ctx = Context.root().with(Baggage.builder().put("tenant_class", "DF 28").build());
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
+-
+-        // then
+-        String header = carrier.get("baggage");
+-        assertThat(header).contains("tenant_class=DF%2028");
+-        assertThat(header).doesNotContain("DF+28");
+-
+-        // and: stock extraction возвращает исходное значение без изменения
+-        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
+-        assertThat(Baggage.fromContext(extracted).getEntryValue("tenant_class")).isEqualTo("DF 28");
+-    }
+-
+-    @Test
+-    @DisplayName("conformance: UTF-8 Unicode проходит stock inject/extract round-trip без изменения значения")
+-    void unicodeValue_stockRoundTrip_conformance() {
+-        // given
+-        String original = "тест-значение-Ω";
+-        Context ctx = Context.root().with(Baggage.builder().put("tenant_class", original).build());
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
+-        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
+-
+-        // then
+-        assertThat(Baggage.fromContext(extracted).getEntryValue("tenant_class")).isEqualTo(original);
+-    }
+-
+-    @Test
+-    @DisplayName("conformance: denied/non-allowlisted ключи отсутствуют в заголовке целиком")
+-    void deniedKeys_absentFromHeader_conformance() {
+-        // given
+-        Context ctx = Context.root().with(Baggage.builder()
+-                .put("password", "leak")
+-                .put("tenant_class", "gold")
+-                .put("not_allowlisted", "x")
+-                .build());
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
+-
+-        // then
+-        String header = carrier.get("baggage");
+-        assertThat(header).doesNotContain("password").doesNotContain("leak").doesNotContain("not_allowlisted");
+-        assertThat(header).contains("tenant_class=gold");
+-    }
+-
+-    @Test
+-    @DisplayName("conformance: BaggageEntryMetadata сохраняется и кодируется штатным delegate")
+-    void metadataPreserved_encodedByStockDelegate_conformance() {
+-        // given
+-        Context ctx = Context.root().with(Baggage.builder()
+-                .put("tenant_class", "gold", BaggageEntryMetadata.create("verified=true"))
+-                .build());
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
+-        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
+-
+-        // then
+-        Baggage baggage = Baggage.fromContext(extracted);
+-        assertThat(baggage.getEntryValue("tenant_class")).isEqualTo("gold");
+-        assertThat(baggage.asMap().get("tenant_class").getMetadata().getValue()).isEqualTo("verified=true");
+-    }
+-
+-    @Test
+-    @DisplayName("conformance: свыше 64 entries и заголовок свыше 8192 байт ограничены stock OTel contract")
+-    void overLimitEntries_boundedByStockContract_conformance() {
+-        // given
+-        java.util.Set<String> allowedKeys = new java.util.HashSet<>();
+-        BaggageBuilder builder = Baggage.builder();
+-        for (int i = 0; i < 100; i++) {
+-            String key = "k" + i;
+-            allowedKeys.add(key);
+-            builder.put(key, "v" + i);
+-        }
+-        FilteringBaggagePropagator propagator =
+-                new FilteringBaggagePropagator(W3CBaggagePropagator.getInstance(), allowedKeys, DENY);
+-        Context ctx = Context.root().with(builder.build());
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        propagator.inject(ctx, carrier, (c, k, v) -> c.put(k, v));
+-
+-        // then
+-        String header = carrier.get("baggage");
+-        assertThat(header).isNotNull();
+-        assertThat(header.getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(8192);
+-
+-        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
+-        assertThat(Baggage.fromContext(extracted).size()).isLessThanOrEqualTo(64);
+-    }
+-
+-    @Test
+-    @DisplayName("conformance: исходный Context/Baggage не мутируются inject-ом")
+-    void originalContextAndBaggage_notMutated_conformance() {
+-        // given
+-        Baggage original = Baggage.builder()
+-                .put("password", "leak")
+-                .put("tenant_class", "gold")
+-                .build();
+-        Context ctx = Context.root().with(original);
+-        Map<String, String> carrier = new HashMap<>();
+-
+-        // when
+-        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
+-
+-        // then
+-        Baggage stillOriginal = Baggage.fromContext(ctx);
+-        assertThat(stillOriginal.getEntryValue("password")).isEqualTo("leak");
+-        assertThat(stillOriginal.size()).isEqualTo(2);
+-    }
+-}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageKeyPolicy.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageKeyPolicy.java
+new file mode 100644
+index 00000000..15446b4b
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageKeyPolicy.java
+@@ -0,0 +1,45 @@
++package space.br1440.platform.tracing.otel.javaagent.configuration;
++
++import java.util.List;
++import java.util.Locale;
++import java.util.Set;
++import java.util.regex.Pattern;
++import java.util.stream.Collectors;
++
++/**
++ * Неизменяемая политика ключей baggage: запрет имеет приоритет над разрешением.
++ */
++public final class BaggageKeyPolicy {
++
++    private final Set<String> allowedKeys;
++    private final List<Pattern> denyPatterns;
++
++    public BaggageKeyPolicy(Set<String> allowedKeys, List<Pattern> denyPatterns) {
++        this.allowedKeys = allowedKeys.stream()
++                .map(key -> key.toLowerCase(Locale.ROOT))
++                .collect(Collectors.toUnmodifiableSet());
++        this.denyPatterns = List.copyOf(denyPatterns);
++    }
++
++    public boolean allows(String key) {
++        if (key == null) {
++            return false;
++        }
++
++        String normalizedKey = key.toLowerCase(Locale.ROOT);
++        if (!allowedKeys.contains(normalizedKey)) {
++            return false;
++        }
++
++        for (Pattern pattern : denyPatterns) {
++            if (pattern.matcher(normalizedKey).find()) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    public boolean isEmpty() {
++        return allowedKeys.isEmpty();
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/PropagatorConfigurationContract.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/PropagatorConfigurationContract.java
+new file mode 100644
+index 00000000..f68dd73d
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/configuration/PropagatorConfigurationContract.java
+@@ -0,0 +1,36 @@
++package space.br1440.platform.tracing.otel.javaagent.configuration;
++
++import java.util.Objects;
++import java.util.Set;
++import java.util.TreeSet;
++
++import io.opentelemetry.sdk.autoconfigure.spi.ConfigProperties;
++import io.opentelemetry.sdk.autoconfigure.spi.ConfigurationException;
++import lombok.experimental.UtilityClass;
++
++/**
++ * Ограничивает набор пропагаторов, для которых платформа контролирует перенос baggage.
++ */
++@UtilityClass
++public final class PropagatorConfigurationContract {
++
++    public static final String NONE = "none";
++    public static final String PLATFORM_PROPAGATOR = "platform-trace-control";
++    public static final Set<String> SUPPORTED_PROPAGATORS =
++            Set.of("tracecontext", "baggage", "b3", "b3multi", PLATFORM_PROPAGATOR, NONE);
++
++    public static void requireSupported(ConfigProperties config) {
++        Objects.requireNonNull(config, "config");
++
++        Set<String> unsupported = new TreeSet<>(config.getList(OtelSdkPropertyNames.PROPAGATORS));
++        unsupported.removeAll(SUPPORTED_PROPAGATORS);
++        if (!unsupported.isEmpty()) {
++            throw new ConfigurationPropertyException(
++                    OtelSdkPropertyNames.PROPAGATORS,
++                    new ConfigurationException(OtelSdkPropertyNames.PROPAGATORS
++                            + " contains unsupported propagators " + unsupported
++                            + "; supported: " + new TreeSet<>(SUPPORTED_PROPAGATORS))
++            );
++        }
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagator.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagator.java
+new file mode 100644
+index 00000000..c9eeefbc
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/main/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagator.java
+@@ -0,0 +1,71 @@
++package space.br1440.platform.tracing.otel.javaagent.propagation;
++
++import java.util.Collection;
++import java.util.Objects;
++import java.util.function.Predicate;
++import jakarta.annotation.Nonnull;
++
++import space.br1440.platform.tracing.api.propagation.PlatformBaggageKeys;
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
++
++import io.opentelemetry.api.baggage.Baggage;
++import io.opentelemetry.api.baggage.BaggageBuilder;
++import io.opentelemetry.context.Context;
++import io.opentelemetry.context.propagation.TextMapGetter;
++import io.opentelemetry.context.propagation.TextMapPropagator;
++import io.opentelemetry.context.propagation.TextMapSetter;
++
++final class PlatformBaggagePropagator implements TextMapPropagator {
++
++    private final TextMapPropagator delegate;
++    private final BaggageKeyPolicy outboundPolicy;
++
++    PlatformBaggagePropagator(TextMapPropagator delegate, BaggageKeyPolicy outboundPolicy) {
++        this.delegate = Objects.requireNonNull(delegate, "delegate");
++        this.outboundPolicy = Objects.requireNonNull(outboundPolicy, "outboundPolicy");
++    }
++
++    @Override
++    public Collection<String> fields() {
++        return delegate.fields();
++    }
++
++    @Override
++    public <C> Context extract(@Nonnull Context context, C carrier, @Nonnull TextMapGetter<C> getter) {
++        Objects.requireNonNull(context, "context");
++        Context extracted = Objects.requireNonNull(delegate.extract(context, carrier, getter), "extractedContext");
++        return stripReserved(extracted);
++    }
++
++    @Override
++    public <C> void inject(@Nonnull Context context, C carrier, @Nonnull TextMapSetter<C> setter) {
++        Objects.requireNonNull(context, "context");
++        delegate.inject(applyOutboundPolicy(context), carrier, setter);
++    }
++
++    private Context stripReserved(Context context) {
++        return filter(context, PlatformBaggagePropagator::isReserved);
++    }
++
++    private Context applyOutboundPolicy(Context context) {
++        return filter(context, key -> isReserved(key) || !outboundPolicy.allows(key));
++    }
++
++    private static boolean isReserved(String key) {
++        return PlatformBaggageKeys.CORRELATION_ID.equalsIgnoreCase(key);
++    }
++
++    private static Context filter(Context context, Predicate<String> shouldRemove) {
++        Baggage baggage = Baggage.fromContext(context);
++        BaggageBuilder filtered = null;
++        for (String key : baggage.asMap().keySet()) {
++            if (shouldRemove.test(key)) {
++                if (filtered == null) {
++                    filtered = baggage.toBuilder();
++                }
++                filtered.remove(key);
++            }
++        }
++        return filtered == null ? context : context.with(filtered.build());
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageExtensionConfigTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageExtensionConfigTest.java
+new file mode 100644
+index 00000000..4b46d705
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageExtensionConfigTest.java
+@@ -0,0 +1,154 @@
++package space.br1440.platform.tracing.otel.javaagent.configuration;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.catchThrowableOfType;
++import static space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames.BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS;
++import static space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames.BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS;
++import static space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames.BAGGAGE_PROPAGATION_ENABLED;
++import static space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames.BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS;
++import static space.br1440.platform.tracing.otel.javaagent.configuration.ExtensionPropertyNames.BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS;
++
++import java.util.Map;
++import java.util.regex.PatternSyntaxException;
++
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.ValueSource;
++
++import io.opentelemetry.sdk.autoconfigure.spi.internal.DefaultConfigProperties;
++
++class BaggageExtensionConfigTest {
++
++    @ParameterizedTest
++    @ValueSource(strings = {BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS, BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS})
++    void invalid_pattern_fails_configuration_with_property_name(String propertyName) {
++        // given
++        Map<String, String> properties = Map.of(propertyName, "[");
++
++        // when
++        ConfigurationPropertyException failure = catchThrowableOfType(
++                ConfigurationPropertyException.class, () -> config(properties));
++
++        // then
++        assertThat(failure.propertyName()).isEqualTo(propertyName);
++        assertThat(failure.failure())
++                .hasMessage(propertyName + " contains an invalid regular expression")
++                .hasCauseInstanceOf(PatternSyntaxException.class);
++    }
++
++    @ParameterizedTest
++    @ValueSource(strings = {"platform.correlation.id", "Platform.Correlation.Id", "PLATFORM.CORRELATION.ID"})
++    void outbound_allowlist_rejects_reserved_key_in_any_case(String key) {
++        // given
++        Map<String, String> properties = Map.of(BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS, "traffic_source," + key);
++
++        // when
++        ConfigurationPropertyException failure = catchThrowableOfType(
++                ConfigurationPropertyException.class, () -> config(properties));
++
++        // then
++        assertThat(failure.propertyName()).isEqualTo(BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS);
++        assertThat(failure.failure()).hasMessage(BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS
++                + " must not contain reserved key platform.correlation.id");
++    }
++
++    @Test
++    void invalid_outbound_policy_is_rejected_even_when_propagation_is_disabled() {
++        // given
++        Map<String, String> properties = Map.of(
++                BAGGAGE_PROPAGATION_ENABLED, "false",
++                BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS, "[");
++
++        // when
++        ConfigurationPropertyException failure = catchThrowableOfType(
++                ConfigurationPropertyException.class, () -> config(properties));
++
++        // then
++        assertThat(failure.propertyName()).isEqualTo(BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS);
++    }
++
++    @Test
++    void defaults_allow_correlation_only_for_span_attributes() {
++        // given
++        BaggageExtensionConfig config = config(Map.of());
++
++        // when
++        BaggageKeyPolicy outbound = config.outboundHeaderPolicy();
++        BaggageKeyPolicy spanAttributes = config.spanAttributesPolicy();
++
++        // then
++        assertThat(config.propagationEnabled()).isTrue();
++        assertThat(outbound.allows("traffic_source")).isTrue();
++        assertThat(outbound.allows("tenant_class")).isTrue();
++        assertThat(outbound.allows("platform.correlation.id")).isFalse();
++        assertThat(spanAttributes.allows("platform.correlation.id")).isTrue();
++        assertThat(spanAttributes.allows("Platform.Correlation.Id")).isTrue();
++        assertThat(outbound).isSameAs(config.outboundHeaderPolicy());
++        assertThat(spanAttributes).isSameAs(config.spanAttributesPolicy());
++    }
++
++    @Test
++    void policies_are_independent_and_compile_case_insensitive_deny_patterns() {
++        // given
++        BaggageExtensionConfig config = config(Map.of(
++                BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS, "Tenant_Class,outbound_only,access_token",
++                BAGGAGE_OUTBOUND_HEADER_DENY_PATTERNS, "TOKEN",
++                BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS, "Tenant_Class,span_only,outbound_only",
++                BAGGAGE_SPAN_ATTRIBUTES_DENY_PATTERNS, "OUTBOUND"));
++
++        // when
++        BaggageKeyPolicy outbound = config.outboundHeaderPolicy();
++        BaggageKeyPolicy spanAttributes = config.spanAttributesPolicy();
++
++        // then
++        assertThat(outbound.allows("TENANT_CLASS")).isTrue();
++        assertThat(outbound.allows("outbound_only")).isTrue();
++        assertThat(outbound.allows("access_token")).isFalse();
++        assertThat(outbound.allows("span_only")).isFalse();
++        assertThat(spanAttributes.allows("tenant_class")).isTrue();
++        assertThat(spanAttributes.allows("span_only")).isTrue();
++        assertThat(spanAttributes.allows("outbound_only")).isFalse();
++    }
++
++    @Test
++    void default_deny_patterns_override_explicit_allowlists() {
++        // given
++        BaggageExtensionConfig config = config(Map.of(
++                BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS, "traffic_source,password_x,api_secret,access_token",
++                BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS, "traffic_source,password_x,api_secret,access_token"));
++
++        // when
++        BaggageKeyPolicy outbound = config.outboundHeaderPolicy();
++        BaggageKeyPolicy spanAttributes = config.spanAttributesPolicy();
++
++        // then
++        assertThat(outbound.allows("traffic_source")).isTrue();
++        assertThat(spanAttributes.allows("traffic_source")).isTrue();
++        for (String key : new String[] {"password_x", "api_secret", "access_token"}) {
++            assertThat(outbound.allows(key)).as(key).isFalse();
++            assertThat(spanAttributes.allows(key)).as(key).isFalse();
++        }
++    }
++
++    @Test
++    void explicit_empty_allowlists_disable_both_policies() {
++        // given
++        BaggageExtensionConfig config = config(Map.of(
++                BAGGAGE_OUTBOUND_HEADER_ALLOWED_KEYS, "",
++                BAGGAGE_SPAN_ATTRIBUTES_ALLOWED_KEYS, ""));
++
++        // when
++        BaggageKeyPolicy outbound = config.outboundHeaderPolicy();
++        BaggageKeyPolicy spanAttributes = config.spanAttributesPolicy();
++
++        // then
++        assertThat(outbound.isEmpty()).isTrue();
++        assertThat(spanAttributes.isEmpty()).isTrue();
++        assertThat(outbound.allows("traffic_source")).isFalse();
++        assertThat(spanAttributes.allows("platform.correlation.id")).isFalse();
++    }
++
++    private static BaggageExtensionConfig config(Map<String, String> properties) {
++        return new BaggageExtensionConfig(new ExtensionConfigReader(DefaultConfigProperties.createFromMap(properties)));
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageKeyPolicyTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageKeyPolicyTest.java
+new file mode 100644
+index 00000000..a1a3a77b
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/BaggageKeyPolicyTest.java
+@@ -0,0 +1,90 @@
++package space.br1440.platform.tracing.otel.javaagent.configuration;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++import java.util.regex.Pattern;
++
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.NullSource;
++import org.junit.jupiter.params.provider.ValueSource;
++
++class BaggageKeyPolicyTest {
++
++    @ParameterizedTest
++    @ValueSource(strings = {"tenant_class", "Tenant_Class", "TENANT_CLASS"})
++    void allows_keys_independently_of_case(String key) {
++        // given
++        BaggageKeyPolicy policy = new BaggageKeyPolicy(Set.of("Tenant_Class"), List.of());
++
++        // when
++        boolean allowed = policy.allows(key);
++
++        // then
++        assertThat(allowed).isTrue();
++    }
++
++    @ParameterizedTest
++    @ValueSource(strings = {"access_token", "ACCESS_TOKEN", "Token_suffix", "prefix_token_suffix"})
++    void deny_pattern_matches_substrings_and_overrides_allowlist(String key) {
++        // given
++        BaggageKeyPolicy policy = new BaggageKeyPolicy(Set.of(key),
++                List.of(Pattern.compile("TOKEN", Pattern.CASE_INSENSITIVE)));
++
++        // when
++        boolean allowed = policy.allows(key);
++
++        // then
++        assertThat(allowed).isFalse();
++    }
++
++    @ParameterizedTest
++    @NullSource
++    @ValueSource(strings = {"", "unlisted", " tenant_class "})
++    void rejects_null_and_unlisted_keys(String key) {
++        // given
++        BaggageKeyPolicy policy = new BaggageKeyPolicy(Set.of("tenant_class"), List.of());
++
++        // when
++        boolean allowed = policy.allows(key);
++
++        // then
++        assertThat(allowed).isFalse();
++    }
++
++    @Test
++    void keeps_an_immutable_snapshot_of_allowlist_and_deny_patterns() {
++        // given
++        Set<String> allowedKeys = new HashSet<>(Set.of("tenant_class", "access_token"));
++        List<Pattern> denyPatterns = new ArrayList<>(List.of(Pattern.compile("token")));
++        BaggageKeyPolicy policy = new BaggageKeyPolicy(allowedKeys, denyPatterns);
++
++        // when
++        allowedKeys.clear();
++        allowedKeys.add("unlisted");
++        denyPatterns.clear();
++
++        // then
++        assertThat(policy.allows("tenant_class")).isTrue();
++        assertThat(policy.allows("access_token")).isFalse();
++        assertThat(policy.allows("unlisted")).isFalse();
++        assertThat(policy.isEmpty()).isFalse();
++    }
++
++    @Test
++    void empty_allowlist_rejects_every_key() {
++        // given
++        BaggageKeyPolicy policy = new BaggageKeyPolicy(Set.of(), List.of());
++
++        // when
++        boolean allowed = policy.allows("tenant_class");
++
++        // then
++        assertThat(allowed).isFalse();
++        assertThat(policy.isEmpty()).isTrue();
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/PropagatorConfigurationContractTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/PropagatorConfigurationContractTest.java
+new file mode 100644
+index 00000000..225c58a1
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/configuration/PropagatorConfigurationContractTest.java
+@@ -0,0 +1,125 @@
++package space.br1440.platform.tracing.otel.javaagent.configuration;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.catchThrowable;
++
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.TreeSet;
++import java.util.stream.Stream;
++
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.MethodSource;
++import org.junit.jupiter.params.provider.ValueSource;
++
++import io.opentelemetry.sdk.autoconfigure.spi.ConfigurationException;
++import io.opentelemetry.sdk.autoconfigure.spi.internal.DefaultConfigProperties;
++
++class PropagatorConfigurationContractTest {
++
++    // Источник: opentelemetry-javaagent 2.32.0,
++    // inst/META-INF/services/io.opentelemetry.sdk.autoconfigure.spi.ConfigurablePropagatorProvider.
++    // Набор пересверяется при каждом обновлении агента.
++    private static final Set<String> KNOWN_AGENT_PROPAGATORS =
++            Set.of("b3", "b3multi", "jaeger", "ottrace", "xray", "xray-lambda");
++    private static final List<String> REJECTED_AGENT_PROPAGATORS =
++            List.of("jaeger", "ottrace", "xray", "xray-lambda");
++
++    @ParameterizedTest
++    @MethodSource("rejectedAgentPropagators")
++    void rejects_agent_propagators_outside_the_supported_set(String propagator) {
++        // given
++        var config = DefaultConfigProperties.createFromMap(Map.of(OtelSdkPropertyNames.PROPAGATORS, propagator));
++
++        // when
++        Throwable failure = catchThrowable(() -> PropagatorConfigurationContract.requireSupported(config));
++
++        // then
++        assertThat(failure)
++                .isInstanceOf(ConfigurationPropertyException.class)
++                .hasCauseInstanceOf(ConfigurationException.class);
++        ConfigurationPropertyException propertyFailure = (ConfigurationPropertyException) failure;
++        assertThat(propertyFailure.propertyName()).isEqualTo(OtelSdkPropertyNames.PROPAGATORS);
++        assertThat(propertyFailure.failure()).hasMessageContaining("[" + propagator + "]");
++    }
++
++    @Test
++    void rejected_cases_cover_all_unsupported_agent_propagators() {
++        // given
++        Set<String> unsupported = new TreeSet<>(KNOWN_AGENT_PROPAGATORS);
++
++        // when
++        unsupported.removeAll(PropagatorConfigurationContract.SUPPORTED_PROPAGATORS);
++
++        // then
++        assertThat(REJECTED_AGENT_PROPAGATORS).containsExactlyInAnyOrderElementsOf(unsupported);
++    }
++
++    @ParameterizedTest
++    @ValueSource(strings = {
++            "", "none", "tracecontext", "baggage", "b3", "b3multi", "platform-trace-control",
++            "tracecontext,baggage,b3,platform-trace-control"
++    })
++    void accepts_supported_propagators(String propagators) {
++        // given
++        var config = DefaultConfigProperties.createFromMap(Map.of(OtelSdkPropertyNames.PROPAGATORS, propagators));
++
++        // when
++        Throwable failure = catchThrowable(() -> PropagatorConfigurationContract.requireSupported(config));
++
++        // then
++        assertThat(failure).isNull();
++    }
++
++    @Test
++    void accepts_absent_propagators() {
++        // given
++        var config = DefaultConfigProperties.createFromMap(Map.of());
++
++        // when
++        Throwable failure = catchThrowable(() -> PropagatorConfigurationContract.requireSupported(config));
++
++        // then
++        assertThat(failure).isNull();
++    }
++
++    @ParameterizedTest
++    @ValueSource(strings = {"JAEGER", "B3", "unknown"})
++    void rejects_unknown_or_differently_cased_names(String propagator) {
++        // given
++        var config = DefaultConfigProperties.createFromMap(Map.of(OtelSdkPropertyNames.PROPAGATORS, propagator));
++
++        // when
++        Throwable failure = catchThrowable(() -> PropagatorConfigurationContract.requireSupported(config));
++
++        // then
++        assertThat(failure).isInstanceOf(ConfigurationPropertyException.class);
++        ConfigurationPropertyException propertyFailure = (ConfigurationPropertyException) failure;
++        assertThat(propertyFailure.propertyName()).isEqualTo(OtelSdkPropertyNames.PROPAGATORS);
++        assertThat(propertyFailure.failure()).hasMessageContaining("[" + propagator + "]");
++    }
++
++    @Test
++    void reports_unsupported_and_supported_names_in_deterministic_order() {
++        // given
++        var config = DefaultConfigProperties.createFromMap(Map.of(
++                OtelSdkPropertyNames.PROPAGATORS, "xray,tracecontext,ottrace,jaeger,xray"
++        ));
++
++        // when
++        Throwable failure = catchThrowable(() -> PropagatorConfigurationContract.requireSupported(config));
++
++        // then
++        assertThat(failure).isInstanceOf(ConfigurationPropertyException.class);
++        assertThat(((ConfigurationPropertyException) failure).failure()).hasMessage(
++                "otel.propagators contains unsupported propagators [jaeger, ottrace, xray]; "
++                        + "supported: [b3, b3multi, baggage, none, platform-trace-control, tracecontext]"
++        );
++    }
++
++    private static Stream<String> rejectedAgentPropagators() {
++        return REJECTED_AGENT_PROPAGATORS.stream();
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorBaggageLimitsTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorBaggageLimitsTest.java
+new file mode 100644
+index 00000000..8f6754fb
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorBaggageLimitsTest.java
+@@ -0,0 +1,145 @@
++package space.br1440.platform.tracing.otel.javaagent.propagation;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import org.junit.jupiter.api.DisplayName;
++import org.junit.jupiter.api.Test;
++
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
++
++import io.opentelemetry.api.baggage.Baggage;
++import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
++import io.opentelemetry.context.Context;
++import io.opentelemetry.context.propagation.TextMapGetter;
++
++/**
++ * Проверяет сохранение ограничений входящего W3C baggage из OTel SDK 1.62.0
++ * (GHSA-rcgg-9c38-7xpx, PR #8378).
++ *
++ * <p>{@link PlatformBaggagePropagator} делегирует разбор штатному {@link W3CBaggagePropagator},
++ * сохраняя защиту от неограниченного разбора недоверенного заголовка.</p>
++ */
++class PlatformBaggagePropagatorBaggageLimitsTest {
++
++    /** Лимиты из спецификации W3C baggage, применяемые штатным propagator'ом (см. fix #8378). */
++    private static final int MAX_BAGGAGE_ENTRIES = 64;
++    private static final int MAX_BAGGAGE_BYTES = 8192;
++
++    private static final Set<String> ALLOWLIST = Set.of("traffic_source", "tenant_class");
++    /** Возвращает заголовок {@code baggage} как единственное значение. */
++    private static final TextMapGetter<Map<String, String>> MAP_GETTER =
++            new TextMapGetter<>() {
++                @Override
++                public Iterable<String> keys(Map<String, String> carrier) {
++                    return carrier.keySet();
++                }
++
++                @Override
++                public String get(Map<String, String> carrier, String key) {
++                    return carrier == null ? null : carrier.get(key);
++                }
++            };
++
++    private static PlatformBaggagePropagator newPropagator() {
++        return new PlatformBaggagePropagator(
++                W3CBaggagePropagator.getInstance(), new BaggageKeyPolicy(ALLOWLIST, List.of()));
++    }
++
++    @Test
++    @DisplayName("extract: входящий заголовок свыше 64 записей урезается до лимита W3C (наследуется от stock)")
++    void extract_cappedAtMaxEntries() {
++        // given
++        int oversized = MAX_BAGGAGE_ENTRIES + 36; // 100 записей
++        StringBuilder header = new StringBuilder();
++        for (int i = 0; i < oversized; i++) {
++            if (i > 0) {
++                header.append(',');
++            }
++            header.append("k").append(i).append("=v").append(i);
++        }
++        Map<String, String> carrier = new HashMap<>();
++        carrier.put("baggage", header.toString());
++
++        // when
++        Context extracted = newPropagator().extract(Context.root(), carrier, MAP_GETTER);
++
++        // then
++        Baggage baggage = Baggage.fromContext(extracted);
++        assertThat(baggage.size())
++                .as("extract должен наследовать лимит MAX_BAGGAGE_ENTRIES от stock W3CBaggagePropagator")
++                .isEqualTo(MAX_BAGGAGE_ENTRIES);
++    }
++
++    @Test
++    @DisplayName("extract: входящий заголовок свыше 8192 байт целиком отбрасывается (защита от DoS)")
++    void extract_oversizedHeaderDropped() {
++        // given
++        String hugeValue = "a".repeat(MAX_BAGGAGE_BYTES + 1000);
++        Map<String, String> carrier = new HashMap<>();
++        carrier.put("baggage", "k=" + hugeValue);
++
++        // when
++        Context extracted = newPropagator().extract(Context.root(), carrier, MAP_GETTER);
++
++        // then
++        assertThat(Baggage.fromContext(extracted).isEmpty())
++                .as("заголовок свыше MAX_BAGGAGE_BYTES должен отбрасываться целиком")
++                .isTrue();
++    }
++
++    @Test
++    @DisplayName("inject: allowlist-фильтрация исходящего baggage не регрессировала")
++    void inject_allowlistFilteringStillWorks() {
++        // given
++        Context ctx = Context.root().with(Baggage.builder()
++                .put("password", "secret123")
++                .put("traffic_source", "qa")
++                .build());
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
++
++        // then
++        String baggage = carrier.get("baggage");
++        assertThat(baggage)
++                .doesNotContain("password")
++                .doesNotContain("secret123")
++                .contains("traffic_source=qa");
++    }
++
++    @Test
++    @DisplayName("extract: empty W3C baggage value is retained on OTel 1.64")
++    void extractRetainsEmptyBaggageValue() {
++        // given
++        Map<String, String> carrier = Map.of("baggage", "empty=,traffic_source=qa");
++
++        // when
++        Baggage baggage = Baggage.fromContext(
++                newPropagator().extract(Context.root(), carrier, MAP_GETTER));
++
++        // then
++        assertThat(baggage.getEntryValue("empty")).isEmpty();
++        assertThat(baggage.getEntryValue("traffic_source")).isEqualTo("qa");
++    }
++
++    @Test
++    @DisplayName("extract: malformed percent encoding is discarded without damaging a valid neighbour")
++    void extractDiscardsMalformedPercentEncodingAndKeepsValidNeighbour() {
++        // given
++        Map<String, String> carrier = Map.of("baggage", "broken=%ZZ,traffic_source=qa");
++
++        // when
++        Baggage baggage = Baggage.fromContext(
++                newPropagator().extract(Context.root(), carrier, MAP_GETTER));
++
++        // then
++        assertThat(baggage.getEntryValue("broken")).isNull();
++        assertThat(baggage.getEntryValue("traffic_source")).isEqualTo("qa");
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorInjectionTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorInjectionTest.java
+new file mode 100644
+index 00000000..d6fa4503
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorInjectionTest.java
+@@ -0,0 +1,240 @@
++package space.br1440.platform.tracing.otel.javaagent.propagation;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++import java.nio.charset.StandardCharsets;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.regex.Pattern;
++
++import org.junit.jupiter.api.DisplayName;
++import org.junit.jupiter.api.Test;
++
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
++
++import io.opentelemetry.api.baggage.Baggage;
++import io.opentelemetry.api.baggage.BaggageBuilder;
++import io.opentelemetry.api.baggage.BaggageEntryMetadata;
++import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
++import io.opentelemetry.context.Context;
++import io.opentelemetry.context.propagation.TextMapGetter;
++import io.opentelemetry.context.propagation.TextMapSetter;
++
++@DisplayName("PlatformBaggagePropagator: исходящая фильтрация и сериализация W3C")
++class PlatformBaggagePropagatorInjectionTest {
++
++    private static final Set<String> ALLOWLIST = Set.of("traffic_source", "tenant_class");
++    private static final List<Pattern> DENY = List.of("password", "secret", "token").stream()
++            .map(pattern -> Pattern.compile(pattern, Pattern.CASE_INSENSITIVE))
++            .toList();
++
++    private static PlatformBaggagePropagator newPropagator() {
++        return new PlatformBaggagePropagator(
++                W3CBaggagePropagator.getInstance(), new BaggageKeyPolicy(ALLOWLIST, DENY));
++    }
++
++    @Test
++    @DisplayName("characterization: полностью отфильтрованный baggage не вызывает setter.set ни разу")
++    void fullyFilteredBaggage_neverCallsSetter_characterization() {
++        // given
++        Context ctx = Context.root().with(Baggage.builder()
++                .put("password", "secret123")
++                .put("token", "jwt-abc")
++                .build());
++        AtomicInteger setterCalls = new AtomicInteger();
++        TextMapSetter<Map<String, String>> countingSetter = (carrier, key, value) -> {
++            setterCalls.incrementAndGet();
++            carrier.put(key, value);
++        };
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, countingSetter);
++
++        // then
++        assertThat(setterCalls.get()).isZero();
++        assertThat(carrier).isEmpty();
++    }
++
++    @Test
++    @DisplayName("characterization: пустой (без entries) baggage не вызывает setter.set ни разу")
++    void emptyBaggage_neverCallsSetter_characterization() {
++        // given
++        Context ctx = Context.root();
++        AtomicInteger setterCalls = new AtomicInteger();
++        TextMapSetter<Map<String, String>> countingSetter = (carrier, key, value) -> setterCalls.incrementAndGet();
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, countingSetter);
++
++        // then
++        assertThat(setterCalls.get()).isZero();
++        assertThat(carrier).isEmpty();
++    }
++
++    @Test
++    @DisplayName("extract не применяет исходящие allowlist и deny-паттерны")
++    void extract_doesNotApplyOutboundPolicy() {
++        // given
++        Map<String, String> carrier = new HashMap<>();
++        Context outboundCtx = Context.root().with(Baggage.builder()
++                .put("password", "leak")
++                .put("not_allowlisted", "x")
++                .put("tenant_class", "gold")
++                .build());
++        W3CBaggagePropagator.getInstance().inject(outboundCtx, carrier, (c, k, v) -> c.put(k, v));
++
++        // when
++        Context extracted = newPropagator().extract(Context.root(), carrier, MAP_GETTER);
++
++        // then
++        Baggage baggage = Baggage.fromContext(extracted);
++        assertThat(baggage.getEntryValue("password"))
++                .as("extract не вычищает deny-ключи — фильтрация только на inject")
++                .isEqualTo("leak");
++        assertThat(baggage.getEntryValue("not_allowlisted"))
++                .as("extract не проверяет allowlist — фильтрация только на inject")
++                .isEqualTo("x");
++        assertThat(baggage.getEntryValue("tenant_class")).isEqualTo("gold");
++    }
++
++    private static final TextMapGetter<Map<String, String>> MAP_GETTER = new TextMapGetter<>() {
++        @Override
++        public Iterable<String> keys(Map<String, String> carrier) {
++            return carrier.keySet();
++        }
++
++        @Override
++        public String get(Map<String, String> carrier, String key) {
++            return carrier == null ? null : carrier.get(key);
++        }
++    };
++
++    @Test
++    @DisplayName("conformance: ASCII space кодируется как %20 (не '+') и проходит stock round-trip")
++    void spaceEncodedAsPercent20_stockRoundTrip_conformance() {
++        // given
++        Context ctx = Context.root().with(Baggage.builder().put("tenant_class", "DF 28").build());
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
++
++        // then
++        String header = carrier.get("baggage");
++        assertThat(header).contains("tenant_class=DF%2028");
++        assertThat(header).doesNotContain("DF+28");
++
++        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
++        assertThat(Baggage.fromContext(extracted).getEntryValue("tenant_class")).isEqualTo("DF 28");
++    }
++
++    @Test
++    @DisplayName("conformance: UTF-8 Unicode проходит stock inject/extract round-trip без изменения значения")
++    void unicodeValue_stockRoundTrip_conformance() {
++        // given
++        String original = "тест-значение-Ω";
++        Context ctx = Context.root().with(Baggage.builder().put("tenant_class", original).build());
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
++        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
++
++        // then
++        assertThat(Baggage.fromContext(extracted).getEntryValue("tenant_class")).isEqualTo(original);
++    }
++
++    @Test
++    @DisplayName("conformance: denied/non-allowlisted ключи отсутствуют в заголовке целиком")
++    void deniedKeys_absentFromHeader_conformance() {
++        // given
++        Context ctx = Context.root().with(Baggage.builder()
++                .put("password", "leak")
++                .put("tenant_class", "gold")
++                .put("not_allowlisted", "x")
++                .build());
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
++
++        // then
++        String header = carrier.get("baggage");
++        assertThat(header).doesNotContain("password").doesNotContain("leak").doesNotContain("not_allowlisted");
++        assertThat(header).contains("tenant_class=gold");
++    }
++
++    @Test
++    @DisplayName("conformance: BaggageEntryMetadata сохраняется и кодируется штатным delegate")
++    void metadataPreserved_encodedByStockDelegate_conformance() {
++        // given
++        Context ctx = Context.root().with(Baggage.builder()
++                .put("tenant_class", "gold", BaggageEntryMetadata.create("verified=true"))
++                .put("not_allowlisted", "removed")
++                .build());
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
++        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
++
++        // then
++        Baggage baggage = Baggage.fromContext(extracted);
++        assertThat(baggage.getEntryValue("tenant_class")).isEqualTo("gold");
++        assertThat(baggage.asMap().get("tenant_class").getMetadata().getValue()).isEqualTo("verified=true");
++    }
++
++    @Test
++    @DisplayName("conformance: свыше 64 entries и заголовок свыше 8192 байт ограничены stock OTel contract")
++    void overLimitEntries_boundedByStockContract_conformance() {
++        // given
++        Set<String> allowedKeys = new HashSet<>();
++        BaggageBuilder builder = Baggage.builder();
++        for (int i = 0; i < 100; i++) {
++            String key = "k" + i;
++            allowedKeys.add(key);
++            builder.put(key, "v" + i);
++        }
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(
++                W3CBaggagePropagator.getInstance(), new BaggageKeyPolicy(allowedKeys, DENY));
++        Context ctx = Context.root().with(builder.build());
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        propagator.inject(ctx, carrier, (c, k, v) -> c.put(k, v));
++
++        // then
++        String header = carrier.get("baggage");
++        assertThat(header).isNotNull();
++        assertThat(header.getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(8192);
++
++        Context extracted = W3CBaggagePropagator.getInstance().extract(Context.root(), carrier, MAP_GETTER);
++        assertThat(Baggage.fromContext(extracted).size()).isLessThanOrEqualTo(64);
++    }
++
++    @Test
++    @DisplayName("conformance: исходный Context/Baggage не мутируются inject-ом")
++    void originalContextAndBaggage_notMutated_conformance() {
++        // given
++        Baggage original = Baggage.builder()
++                .put("password", "leak")
++                .put("tenant_class", "gold")
++                .build();
++        Context ctx = Context.root().with(original);
++        Map<String, String> carrier = new HashMap<>();
++
++        // when
++        newPropagator().inject(ctx, carrier, (c, k, v) -> c.put(k, v));
++
++        // then
++        Baggage stillOriginal = Baggage.fromContext(ctx);
++        assertThat(stillOriginal.getEntryValue("password")).isEqualTo("leak");
++        assertThat(stillOriginal.size()).isEqualTo(2);
++    }
++}
+diff --git a/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorTest.java b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorTest.java
+new file mode 100644
+index 00000000..553102dd
+--- /dev/null
++++ b/platform-starters-tracing/platform-tracing-otel-javaagent-extension/src/test/java/space/br1440/platform/tracing/otel/javaagent/propagation/PlatformBaggagePropagatorTest.java
+@@ -0,0 +1,263 @@
++package space.br1440.platform.tracing.otel.javaagent.propagation;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.mockito.ArgumentMatchers.same;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoInteractions;
++import static org.mockito.Mockito.when;
++
++import java.util.Collection;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.concurrent.ConcurrentHashMap;
++
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.ValueSource;
++import org.mockito.ArgumentCaptor;
++
++import space.br1440.platform.tracing.api.propagation.PlatformBaggageKeys;
++import space.br1440.platform.tracing.otel.javaagent.configuration.BaggageKeyPolicy;
++
++import io.opentelemetry.api.baggage.Baggage;
++import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
++import io.opentelemetry.context.Context;
++import io.opentelemetry.context.ContextKey;
++import io.opentelemetry.context.propagation.TextMapGetter;
++import io.opentelemetry.context.propagation.TextMapPropagator;
++import io.opentelemetry.context.propagation.TextMapSetter;
++
++class PlatformBaggagePropagatorTest {
++
++    private static final BaggageKeyPolicy POLICY = new BaggageKeyPolicy(
++            Set.of("tenant_class", PlatformBaggageKeys.CORRELATION_ID), List.of());
++
++    private static final TextMapGetter<Map<String, String>> GETTER = new TextMapGetter<>() {
++        @Override
++        public Iterable<String> keys(Map<String, String> carrier) {
++            if (carrier == null) {
++                return List.of();
++            }
++
++            return carrier.keySet();
++        }
++
++        @Override
++        public String get(Map<String, String> carrier, String key) {
++            if (carrier == null) {
++                return null;
++            }
++
++            return carrier.get(key);
++        }
++    };
++
++    private static final TextMapSetter<Map<String, String>> SETTER = (carrier, key, value) -> {
++        if (carrier == null || key == null || value == null) {
++            return;
++        }
++
++        carrier.put(key, value);
++    };
++
++    private final PlatformBaggagePropagator propagator =
++            new PlatformBaggagePropagator(W3CBaggagePropagator.getInstance(), POLICY);
++
++    @ParameterizedTest
++    @ValueSource(strings = {"platform.correlation.id", "Platform.Correlation.Id", "PLATFORM.CORRELATION.ID"})
++    void stripsReservedCorrelationOnExtractAndPreservesUnrelatedBaggage(String reservedKey) {
++        // given
++        Map<String, String> carrier = Map.of("baggage", reservedKey + "=spoofed,traffic_source=x");
++
++        // when
++        Context extracted = propagator.extract(Context.root(), carrier, GETTER);
++
++        // then
++        Baggage baggage = Baggage.fromContext(extracted);
++        assertThat(baggage.size()).isEqualTo(1);
++        assertThat(baggage.getEntryValue(reservedKey)).isNull();
++        assertThat(baggage.getEntryValue("traffic_source")).isEqualTo("x");
++    }
++
++    @ParameterizedTest
++    @ValueSource(strings = {"platform.correlation.id", "Platform.Correlation.Id", "PLATFORM.CORRELATION.ID"})
++    void stripsReservedCorrelationOnInjectEvenWhenPolicyAllowsIt(String reservedKey) {
++        // given
++        Context context = Baggage.builder()
++                .put(reservedKey, "workflow-42")
++                .put("tenant_class", "internal")
++                .build()
++                .storeInContext(Context.root());
++        Map<String, String> carrier = new ConcurrentHashMap<>();
++
++        // when
++        propagator.inject(context, carrier, SETTER);
++
++        // then
++        assertThat(POLICY.allows(reservedKey)).isTrue();
++        assertThat(carrier).containsOnlyKeys("baggage");
++        assertThat(carrier.get("baggage")).isEqualTo("tenant_class=internal");
++    }
++
++    @Test
++    @SuppressWarnings({"ConstantConditions", "DataFlowIssue"})
++    void injectWithNullContextPropagatesExceptionBeforeDelegateIsInvoked() {
++        // given
++        TextMapPropagator delegate = mock(TextMapPropagator.class);
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(delegate, POLICY);
++        Map<String, String> carrier = new ConcurrentHashMap<>();
++
++        // when
++        assertThrows(NullPointerException.class,
++                () -> propagator.inject(null, carrier, SETTER));
++
++        // then
++        verifyNoInteractions(delegate);
++        assertThat(carrier).isEmpty();
++    }
++
++    @Test
++    void extractWithDelegateReturningNullPropagatesException() {
++        // given
++        PlatformBaggagePropagator propagatorOverNullDelegate =
++                new PlatformBaggagePropagator(new TextMapPropagator() {
++                    @Override
++                    public Collection<String> fields() {
++                        return List.of();
++                    }
++
++                    @Override
++                    public <C> void inject(Context context, C carrier, TextMapSetter<C> setter) {
++                    }
++
++                    @Override
++                    public <C> Context extract(Context context, C carrier, TextMapGetter<C> getter) {
++                        return null;
++                    }
++                }, POLICY);
++
++        // when
++        // then
++        assertThrows(NullPointerException.class,
++                () -> propagatorOverNullDelegate.extract(Context.root(), Map.of(), GETTER));
++    }
++
++    @Test
++    void removesCanonicalCorrelationAlreadyPresentInInputContext() {
++        // given
++        Context input = Baggage.builder()
++                .put(PlatformBaggageKeys.CORRELATION_ID, "preexisting")
++                .put("tenant_class", "internal")
++                .build()
++                .storeInContext(Context.root());
++
++        // when
++        Context extracted = propagator.extract(input, Map.of(), GETTER);
++
++        // then
++        Baggage baggage = Baggage.fromContext(extracted);
++        assertThat(baggage.getEntryValue(PlatformBaggageKeys.CORRELATION_ID))
++                .isNull();
++        assertThat(baggage.getEntryValue("tenant_class")).isEqualTo("internal");
++    }
++
++    @Test
++    void extractPreservesDelegateContextIdentityWhenReservedKeyIsAbsent() {
++        // given
++        Context input = Context.root();
++        Context extracted = input.with(Baggage.builder().put("not_allowlisted", "x").build());
++        Map<String, String> carrier = Map.of();
++        TextMapPropagator delegate = mock(TextMapPropagator.class);
++        when(delegate.extract(input, carrier, GETTER)).thenReturn(extracted);
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(delegate, POLICY);
++
++        // when
++        Context result = propagator.extract(input, carrier, GETTER);
++
++        // then
++        assertThat(result).isSameAs(extracted);
++    }
++
++    @Test
++    void injectPreservesContextIdentityWhenAllKeysAreAllowed() {
++        // given
++        Context input = Context.root().with(Baggage.builder().put("tenant_class", "gold").build());
++        Map<String, String> carrier = Map.of();
++        TextMapPropagator delegate = mock(TextMapPropagator.class);
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(delegate, POLICY);
++
++        // when
++        propagator.inject(input, carrier, SETTER);
++
++        // then
++        verify(delegate).inject(same(input), same(carrier), same(SETTER));
++    }
++
++    @Test
++    void injectDelegatesEmptyBaggageWithoutReplacingContext() {
++        // given
++        Context input = Context.root();
++        Map<String, String> carrier = Map.of();
++        TextMapPropagator delegate = mock(TextMapPropagator.class);
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(delegate, POLICY);
++
++        // when
++        propagator.inject(input, carrier, SETTER);
++
++        // then
++        verify(delegate).inject(same(input), same(carrier), same(SETTER));
++    }
++
++    @Test
++    void injectDelegatesFullyFilteredBaggageAndPreservesOtherContextValues() {
++        // given
++        ContextKey<String> otherKey = ContextKey.named("other");
++        Context input = Context.root().with(otherKey, "kept")
++                .with(Baggage.builder().put("not_allowlisted", "removed").build());
++        Map<String, String> carrier = Map.of();
++        TextMapPropagator delegate = mock(TextMapPropagator.class);
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(delegate, POLICY);
++        ArgumentCaptor<Context> injected = ArgumentCaptor.forClass(Context.class);
++
++        // when
++        propagator.inject(input, carrier, SETTER);
++
++        // then
++        verify(delegate).inject(injected.capture(), same(carrier), same(SETTER));
++        assertThat(Baggage.fromContext(injected.getValue()).isEmpty()).isTrue();
++        assertThat(injected.getValue().get(otherKey)).isEqualTo("kept");
++        assertThat(Baggage.fromContext(input).getEntryValue("not_allowlisted")).isEqualTo("removed");
++    }
++
++    @Test
++    @SuppressWarnings({"ConstantConditions", "DataFlowIssue"})
++    void extractWithNullContextPropagatesExceptionBeforeDelegateIsInvoked() {
++        // given
++        TextMapPropagator delegate = mock(TextMapPropagator.class);
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(delegate, POLICY);
++
++        // when
++        assertThrows(NullPointerException.class, () -> propagator.extract(null, Map.of(), GETTER));
++
++        // then
++        verifyNoInteractions(delegate);
++    }
++
++    @Test
++    void fieldsAreOwnedByDelegate() {
++        // given
++        Collection<String> fields = List.of("baggage");
++        TextMapPropagator delegate = mock(TextMapPropagator.class);
++        when(delegate.fields()).thenReturn(fields);
++        PlatformBaggagePropagator propagator = new PlatformBaggagePropagator(delegate, POLICY);
++
++        // when
++        Collection<String> result = propagator.fields();
++
++        // then
++        assertThat(result).isSameAs(fields);
++    }
++}
